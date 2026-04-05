@@ -48,6 +48,16 @@ class EventType(Enum):
     SIMULATION_STEP = auto()
     STATE_CHANGED = auto()
 
+    # ── Live Monitor Events ──────────────────────────────────────────────
+    PROCESS_SNAPSHOT = auto()        # periodic real process list update
+    PROCESS_NEW = auto()             # a new real process appeared
+    PROCESS_TERMINATED = auto()      # a real process disappeared
+    IPC_CONNECTION_FOUND = auto()    # shared file or socket link detected
+    SYSTEM_STATS_UPDATE = auto()     # global CPU / RAM / IO metrics
+
+    # ── Mode Events ──────────────────────────────────────────────────────
+    MODE_SWITCHED = auto()           # user switched Live ↔ Simulation
+
 
 # ─── Colour Codes (for GUI) ─────────────────────────────────────────────────
 
