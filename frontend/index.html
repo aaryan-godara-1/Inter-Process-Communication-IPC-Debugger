@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html class="light" lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Geist+Mono:wght@400;700&family=Space+Grotesk:wght@500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+  <script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "background": "#f8f9fa",
+            "surface": "#f8f9fa",
+            "surface-container": "#edeeef",
+            "surface-container-low": "#f3f4f5",
+            "surface-container-lowest": "#ffffff",
+            "surface-variant": "#e1e3e4",
+            "on-surface": "#191c1d",
+            "on-surface-variant": "#474747",
+            "outline": "#777777",
+            "outline-variant": "#c6c6c6",
+            "primary": "#000000",
+            "on-primary": "#e2e2e2",
+            "secondary": "#0061a4",
+            "tertiary": "#69007a"
+          },
+          borderRadius: {
+            "DEFAULT": "1rem",
+            "lg": "1.5rem",
+            "xl": "2.5rem",
+            "full": "9999px"
+          },
+          fontFamily: {
+            "headline": ["Inter"],
+            "body": ["Inter"],
+            "label": ["Space Grotesk"],
+            "mono": ["Geist Mono"]
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background-color: #f8f9fa; overflow: hidden; }
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+    .node-pulse { animation: pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.8; transform: scale(1.02); } }
+    .grid-bg { background-image: radial-gradient(circle, #00000015 1px, transparent 1px); background-size: 24px 24px; }
+    .node-draggable { transition: transform 0.2s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.2s ease; }
+    .node-draggable:hover { transform: scale(1.05); }
+  </style>
+  <title>IPC Debugger</title>
+</head>
+<body class="font-body text-on-surface h-screen w-screen flex flex-col overflow-hidden bg-background">
+  <nav class="fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-8 py-3 bg-white/80 backdrop-blur-xl rounded-full mt-4 mx-auto max-w-[95%] shadow-[0_12px_48px_-12px_rgba(25,28,29,0.06)] border border-white/20">
+    <div class="flex items-center gap-6">
+      <span class="font-mono font-bold text-lg tracking-tighter text-black flex items-center gap-2">
+        <span class="w-2 h-2 bg-primary rounded-full"></span>
+        IPC Debugger
+      </span>
+      <div class="h-4 w-px bg-outline-variant/30"></div>
+      <div class="flex gap-6 items-center">
+        <a class="text-black border-b-2 border-black font-medium text-sm tracking-tight" href="#">Graph</a>
+        <a class="text-gray-400 font-medium text-sm tracking-tight" href="#">Timeline</a>
+        <a class="text-gray-400 font-medium text-sm tracking-tight" href="#">Analysis</a>
+      </div>
+    </div>
+    <div class="flex items-center gap-3">
+      <select id="scenarioSelect" class="rounded-full border border-outline-variant/40 bg-surface-container-low px-4 py-2 text-xs font-mono uppercase tracking-wider">
+        <option value="normal-flow">Normal Flow</option>
+        <option value="deadlock">Deadlock</option>
+        <option value="bottleneck">Bottleneck</option>
+      </select>
+      <button id="runBtn" class="px-6 py-2 bg-primary text-on-primary rounded-full font-mono text-xs uppercase tracking-widest hover:brightness-110 transition-all">Run</button>
+      <button id="refreshBtn" class="p-2 hover:bg-surface-variant rounded-full transition-colors">
+        <span class="material-symbols-outlined text-on-surface-variant text-sm">refresh</span>
+      </button>
+      <div class="px-3 py-1 rounded-full bg-surface-container-low text-[10px] font-mono uppercase tracking-wider">
+        Delay <input id="delayInput" type="number" min="1" value="20" class="w-14 border-0 bg-transparent text-right" /> ms
+      </div>
+    </div>
+  </nav>
+
+  <aside class="fixed left-0 top-1/2 -translate-y-1/2 z-50 flex flex-col gap-4 py-6 px-2 bg-white/80 backdrop-blur-xl rounded-full ml-4 h-fit shadow-[0_12px_48px_-12px_rgba(25,28,29,0.06)] border border-white/20">
+    <div class="flex flex-col items-center gap-4">
+      <div class="bg-black text-white rounded-full p-3 shadow-lg"><span class="material-symbols-outlined">hub</span></div>
+      <div class="text-gray-400 p-3"><span class="material-symbols-outlined">timeline</span></div>
+      <div class="text-gray-400 p-3"><span class="material-symbols-outlined">analytics</span></div>
+      <div class="text-gray-400 p-3"><span class="material-symbols-outlined">settings</span></div>
+    </div>
+  </aside>
+
+  <main class="flex-1 mt-24 mb-6 ml-24 mr-8 grid grid-cols-12 grid-rows-6 gap-6 h-[calc(100vh-140px)]">
+    <section class="col-span-8 row-span-4 bg-surface-container-lowest rounded-lg shadow-[0_12px_48px_-12px_rgba(25,28,29,0.06)] relative flex flex-col overflow-hidden border border-white/20">
+      <div class="p-8 pb-4 flex justify-between items-start z-10">
+        <div>
+          <h2 class="font-headline font-extrabold text-2xl tracking-tighter text-primary">Process Communication Graph</h2>
+          <p id="clusterLabel" class="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant mt-1">Live Topology Map</p>
+        </div>
+        <div class="flex gap-3">
+          <span class="px-3 py-1 bg-secondary/10 text-secondary rounded-full font-mono text-[10px] uppercase tracking-widest border border-secondary/20">Pipe</span>
+          <span class="px-3 py-1 bg-[#22c55e]/10 text-[#22c55e] rounded-full font-mono text-[10px] uppercase tracking-widest border border-[#22c55e]/20">Shared Mem</span>
+          <span class="px-3 py-1 bg-tertiary/10 text-tertiary rounded-full font-mono text-[10px] uppercase tracking-widest border border-tertiary/20">Msg Queue</span>
+        </div>
+      </div>
+
+      <div class="flex-1 relative grid-bg overflow-hidden">
+        <svg class="absolute inset-0 w-full h-full pointer-events-none">
+          <line class="stroke-secondary" opacity="0.4" stroke-dasharray="4 6" stroke-width="2" x1="25%" x2="50%" y1="30%" y2="50%"></line>
+          <line class="stroke-[#22c55e]" opacity="0.6" stroke-width="3" x1="75%" x2="50%" y1="30%" y2="50%"></line>
+          <line class="stroke-tertiary" opacity="0.5" stroke-width="2.5" x1="50%" x2="50%" y1="50%" y2="85%"></line>
+        </svg>
+        <div id="processNodes" class="absolute inset-0"></div>
+      </div>
+    </section>
+
+    <aside class="col-span-4 row-span-4 bg-surface-container-lowest rounded-lg shadow-[0_12px_48px_-12px_rgba(25,28,29,0.06)] p-8 flex flex-col border border-white/20">
+      <h3 class="font-headline font-extrabold text-xl tracking-tighter text-primary mb-6">System Status</h3>
+      <div class="space-y-6 flex-1">
+        <div class="grid grid-cols-2 gap-4">
+          <div class="bg-surface p-4 rounded-lg border border-outline-variant/10">
+            <p class="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant mb-1">Active Procs</p>
+            <p id="activeProcs" class="font-mono text-3xl font-bold">00</p>
+          </div>
+          <div class="bg-surface p-4 rounded-lg border border-outline-variant/10">
+            <p class="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant mb-1">IPC Events</p>
+            <p id="ipcEvents" class="font-mono text-3xl font-bold">0</p>
+          </div>
+        </div>
+        <div id="deadlockBanner" class="bg-[#22c55e]/5 p-4 rounded-lg flex items-center justify-between border border-[#22c55e]/20">
+          <div>
+            <p class="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant mb-1">Deadlock Status</p>
+            <p id="deadlockStatus" class="font-mono text-lg font-bold text-[#22c55e]">NONE DETECTED</p>
+          </div>
+          <span id="deadlockIcon" class="material-symbols-outlined text-[#22c55e] text-3xl">check_circle</span>
+        </div>
+        <div class="flex-1 flex flex-col gap-4 mt-4">
+          <p class="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">Channel Monitor</p>
+          <div id="channelMonitor" class="space-y-3"></div>
+        </div>
+      </div>
+      <button id="reportBtn" class="mt-8 w-full py-4 bg-primary text-on-primary rounded-lg font-mono text-[10px] uppercase tracking-widest hover:brightness-110 transition-all">Refresh Report</button>
+    </aside>
+
+    <section class="col-span-12 row-span-2 bg-surface-container-lowest rounded-lg shadow-[0_12px_48px_-12px_rgba(25,28,29,0.06)] p-8 flex flex-col border border-white/20">
+      <div class="flex justify-between items-center mb-6">
+        <h3 class="font-headline font-extrabold text-xl tracking-tighter text-primary">Execution Timeline</h3>
+        <div class="font-mono text-[9px] uppercase tracking-widest text-on-surface-variant">Recent IPC Events</div>
+      </div>
+      <div id="timelineRows" class="flex-1 overflow-auto space-y-2"></div>
+    </section>
+  </main>
+
+  <footer class="fixed bottom-4 right-8 flex items-center gap-4">
+    <div class="flex items-center gap-2 bg-white/80 backdrop-blur-xl shadow-lg border border-white/20 rounded-full px-4 py-1.5">
+      <span class="w-2 h-2 rounded-full bg-[#22c55e] animate-pulse"></span>
+      <span id="uplinkText" class="font-mono text-[10px] uppercase tracking-widest font-bold">System Uplink Active</span>
+    </div>
+    <div class="flex items-center gap-2 bg-white/80 backdrop-blur-xl shadow-lg border border-white/20 rounded-full px-4 py-1.5">
+      <span id="scenarioText" class="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">Scenario: Normal Flow</span>
+    </div>
+  </footer>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
