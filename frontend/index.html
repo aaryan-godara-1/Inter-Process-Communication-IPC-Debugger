@@ -49,10 +49,11 @@
     .node-pulse { animation: pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
     @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.8; transform: scale(1.02); } }
     .grid-bg { background-image: radial-gradient(circle, #00000015 1px, transparent 1px); background-size: 24px 24px; }
+    .aurora-bg { position: absolute; inset: -30% -20% auto -20%; height: 70%; background: radial-gradient(circle at 20% 40%, rgba(0, 97, 164, 0.18), transparent 60%), radial-gradient(circle at 80% 30%, rgba(105, 0, 122, 0.14), transparent 58%); filter: blur(30px); pointer-events: none; }
     .node-draggable { transition: transform 0.2s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.2s ease; }
     .node-draggable:hover { transform: scale(1.05); }
   </style>
-  <title>IPC Debugger</title>
+  <title>IPC Debugger Control Center</title>
 </head>
 <body class="font-body text-on-surface h-screen w-screen flex flex-col overflow-hidden bg-background">
   <nav class="fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-8 py-3 bg-white/80 backdrop-blur-xl rounded-full mt-4 mx-auto max-w-[95%] shadow-[0_12px_48px_-12px_rgba(25,28,29,0.06)] border border-white/20">
@@ -95,12 +96,14 @@
 
   <main class="flex-1 mt-24 mb-6 ml-24 mr-8 grid grid-cols-12 grid-rows-6 gap-6 h-[calc(100vh-140px)]">
     <section class="col-span-8 row-span-4 bg-surface-container-lowest rounded-lg shadow-[0_12px_48px_-12px_rgba(25,28,29,0.06)] relative flex flex-col overflow-hidden border border-white/20">
+      <div class="aurora-bg"></div>
       <div class="p-8 pb-4 flex justify-between items-start z-10">
         <div>
           <h2 class="font-headline font-extrabold text-2xl tracking-tighter text-primary">Process Communication Graph</h2>
           <p id="clusterLabel" class="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant mt-1">Live Topology Map</p>
         </div>
-        <div class="flex gap-3">
+        <div class="flex gap-3 items-center">
+          <span class="px-3 py-1 bg-black text-white rounded-full font-mono text-[10px] uppercase tracking-widest">UI Refresh</span>
           <span class="px-3 py-1 bg-secondary/10 text-secondary rounded-full font-mono text-[10px] uppercase tracking-widest border border-secondary/20">Pipe</span>
           <span class="px-3 py-1 bg-[#22c55e]/10 text-[#22c55e] rounded-full font-mono text-[10px] uppercase tracking-widest border border-[#22c55e]/20">Shared Mem</span>
           <span class="px-3 py-1 bg-tertiary/10 text-tertiary rounded-full font-mono text-[10px] uppercase tracking-widest border border-tertiary/20">Msg Queue</span>
