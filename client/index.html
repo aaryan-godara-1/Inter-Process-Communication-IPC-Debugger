@@ -1,0 +1,3059 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IPC Graph</title>
+  <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600;700&display=swap');
+  </style>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --panel: #ffffff;
+      --line: rgba(15, 23, 42, 0.08);
+      --text: #111827;
+      --muted: #64748b;
+      --blue: #f59e0b;
+      --green: #111827;
+      --green-deep: #111827;
+      --danger: #dc2626;
+      --shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+      --hairline: rgba(15, 23, 42, 0.06);
+      --font-main: "Geist Mono", "SF Mono", "SFMono-Regular", "Menlo", "Monaco", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      font-family: var(--font-main);
+      scrollbar-width: none;
+    }
+
+    *::-webkit-scrollbar {
+      width: 0;
+      height: 0;
+      display: none;
+    }
+
+    body {
+      margin: 0;
+      font-family: var(--font-main);
+      background-color: #e5e5e5;
+      background-image:
+        repeating-linear-gradient(0deg, rgba(15, 23, 42, 0.18) 0, rgba(15, 23, 42, 0.18) 1px, transparent 1px, transparent 26px),
+        repeating-linear-gradient(90deg, rgba(15, 23, 42, 0.18) 0, rgba(15, 23, 42, 0.18) 1px, transparent 1px, transparent 26px);
+      color: var(--text);
+      height: 100vh;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: geometricPrecision;
+      overflow: hidden;
+    }
+
+    .app {
+      height: 100%;
+      position: relative;
+      overflow: hidden;
+      padding: 0;
+    }
+
+    .panel {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .graph-wrap {
+      position: relative;
+      min-height: 0;
+      width: 100%;
+      height: 100%;
+      padding: 0;
+    }
+
+    #cy {
+      width: 100%;
+      height: 100%;
+      background: transparent;
+      animation: fadeIn 0.4s ease;
+      cursor: grab;
+      border-radius: 0;
+      box-shadow: none;
+      border: 0;
+      backdrop-filter: none;
+    }
+
+    #cy:active {
+      cursor: grabbing;
+    }
+
+    .floating-navbar {
+      position: absolute;
+      left: 50%;
+      bottom: 14px;
+      transform: translateX(-50%);
+      z-index: 12;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: center;
+      max-width: min(920px, calc(100vw - 18px));
+      padding: 14px 16px;
+      border-radius: 24px;
+      background: rgba(255, 255, 255, 0.88);
+      border: 1px solid var(--hairline);
+      box-shadow: 0 22px 50px rgba(15, 23, 42, 0.12);
+      backdrop-filter: blur(22px) saturate(180%);
+      animation: floatUp 0.34s ease;
+      pointer-events: auto;
+    }
+
+    .nav-group {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    button {
+      border: 1px solid #0f172a;
+      border-radius: 999px;
+      padding: 12px 16px;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      transition: transform 0.18s ease, background-color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+      background: #111111;
+      color: #ffffff;
+      box-shadow: none;
+    }
+
+    button,
+    input,
+    select {
+      outline: none;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      background: #000000;
+      border-color: #000000;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
+    }
+
+    button:active {
+      transform: translateY(0);
+    }
+
+    .btn-primary {
+      background: #000000;
+      color: #ffffff;
+      border-color: #000000;
+      box-shadow: 0 12px 26px rgba(15, 23, 42, 0.14);
+    }
+
+    .btn-primary:hover {
+      background: #000000;
+      border-color: #000000;
+    }
+
+    .floating-navbar button {
+      min-width: 134px;
+    }
+
+    .overlay-alert {
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      right: 14px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.92);
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      color: #111827;
+      padding: 10px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+      z-index: 4;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px) saturate(180%);
+    }
+
+    .top-narration {
+      position: absolute;
+      top: 14px;
+      left: 18px;
+      right: 18px;
+      z-index: 5;
+      pointer-events: none;
+      text-align: center;
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: #111827;
+      text-shadow: none;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+
+    .top-narration.visible {
+      opacity: 1;
+    }
+
+    .top-narration.deadlock {
+      color: #b91c1c;
+    }
+
+    .overlay-alert.show {
+      opacity: 1;
+    }
+
+    .tooltip {
+      position: absolute;
+      z-index: 6;
+      transform: translate(-50%, -120%);
+      background: rgba(17, 24, 39, 0.94);
+      color: #ffffff;
+      border-radius: 12px;
+      padding: 8px 11px;
+      font-size: 10px;
+      min-width: 140px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.12s ease;
+      box-shadow: 0 18px 40px rgba(15, 23, 42, 0.26);
+      white-space: pre-line;
+    }
+
+    .tooltip.show {
+      opacity: 1;
+    }
+
+    .tools-drawer {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      width: min(360px, calc(100vw - 20px));
+      height: auto;
+      max-height: calc(100vh - 24px);
+      overflow-y: auto;
+      overflow-x: hidden;
+      z-index: 18;
+      border-radius: 14px;
+      border: 0;
+      background: rgba(255, 255, 255, 0.86);
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+      backdrop-filter: blur(18px) saturate(180%);
+      padding: 8px 8px 10px;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateX(calc(100% + 16px));
+      transition: opacity 0.2s ease, transform 0.24s ease;
+    }
+
+    .tools-drawer.open {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateX(0);
+    }
+
+    .tools-title {
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 2px 2px 6px;
+    }
+
+    .tools-grid {
+      display: grid;
+      gap: 4px;
+    }
+
+    .tools-card {
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      padding: 4px 2px;
+    }
+
+    .tools-card h4 {
+      margin: 0 0 4px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #64748b;
+    }
+
+    .tools-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 4px;
+    }
+
+    .tools-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .tools-row input,
+    .tools-row select {
+      flex: 1;
+      border-radius: 7px;
+      border: 0;
+      background: rgba(15, 23, 42, 0.05);
+      color: #0f172a;
+      font-size: 11px;
+      padding: 7px 8px;
+      font-family: inherit;
+    }
+
+    .tools-row input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      height: 4px;
+      background: #111111;
+      border-radius: 999px;
+      border: 0;
+      padding: 0;
+    }
+
+    .tools-row input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #000000;
+      border: 1px solid #000000;
+      cursor: pointer;
+    }
+
+    .tools-row input[type="range"]::-moz-range-track {
+      height: 4px;
+      background: #111111;
+      border-radius: 999px;
+      border: 0;
+    }
+
+    .tools-row input[type="range"]::-moz-range-thumb {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #000000;
+      border: 1px solid #000000;
+      cursor: pointer;
+    }
+
+    .tools-row button {
+      min-width: 74px;
+      padding: 8px 10px;
+      font-size: 11px;
+    }
+
+    .kbd-hint {
+      font-size: 10px;
+      color: #64748b;
+    }
+
+    .connection-preview {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 3;
+    }
+
+    @keyframes slideDown {
+      from { transform: translateY(-8px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes floatUp {
+      from { opacity: 0; transform: translate(-50%, 10px); }
+      to { opacity: 1; transform: translate(-50%, 0); }
+    }
+
+    @media (max-width: 1100px) {
+      .floating-navbar {
+        width: calc(100vw - 16px);
+        border-radius: 20px;
+        bottom: 8px;
+        padding: 10px;
+      }
+
+      button {
+        padding: 10px 14px;
+        font-size: 12px;
+      }
+
+      .top-narration {
+        font-size: 15px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <section class="panel">
+      <div class="graph-wrap" id="graphWrap">
+        <div id="deadlockAlert" class="overlay-alert"></div>
+        <div id="topNarration" class="top-narration">Simulation log will appear here.</div>
+        <div id="cy"></div>
+        <svg class="connection-preview" id="previewSvg">
+          <line id="previewLine" x1="0" y1="0" x2="0" y2="0" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6 5" opacity="0" />
+        </svg>
+        <div id="tooltip" class="tooltip"></div>
+      </div>
+
+      <nav class="floating-navbar" aria-label="Simulation controls">
+        <div class="nav-group">
+          <button id="btnAddProcess">Add Process</button>
+          <button id="btnAddResource">Add Resource</button>
+          <button id="btnRun" class="btn-primary">Run Simulation</button>
+          <button id="btnTools">Tools</button>
+          <button id="btnReset">Reset</button>
+        </div>
+      </nav>
+
+      <aside id="toolsDrawer" class="tools-drawer" aria-label="Advanced simulation tools">
+        <div class="tools-title">Advanced Tools</div>
+        <div class="tools-grid">
+          <div class="tools-card">
+            <h4>Session</h4>
+            <div class="tools-row">
+              <input id="profileInput" type="text" placeholder="Profile name" value="default" />
+              <button id="btnSaveProfile">Save</button>
+              <button id="btnLoadProfile">Load</button>
+            </div>
+            <div class="tools-row">
+              <select id="profileSelect"></select>
+              <button id="btnDeleteProfile">Delete</button>
+              <button id="btnExportLogs">Export</button>
+            </div>
+          </div>
+
+          <div class="tools-card">
+            <h4>Simulation</h4>
+            <div class="tools-row">
+              <button id="btnLiveMode">Live Mode: Off</button>
+            </div>
+            <div class="tools-row">
+              <select id="schedulerSelect">
+                <option value="fifo">Scheduler: FIFO</option>
+                <option value="round-robin">Scheduler: Round Robin</option>
+                <option value="priority-aging">Scheduler: Priority + Aging</option>
+              </select>
+            </div>
+            <div class="tools-row">
+              <input id="speedRange" type="range" min="250" max="2200" step="50" value="1000" />
+              <span id="speedLabel" class="kbd-hint">1000ms</span>
+            </div>
+            <div class="tools-row">
+              <button id="btnRecoverDeadlock">Recover</button>
+              <button id="btnPresetCycle">Preset Deadlock</button>
+              <button id="btnPresetSafe">Preset Safe</button>
+            </div>
+          </div>
+
+        </div>
+      </aside>
+    </section>
+  </div>
+
+  <script>
+    const processes = {};
+    const resources = {};
+    const eventQueue = [];
+    const processIds = [];
+    const resourceIds = [];
+
+    let processCounter = 0;
+    let resourceCounter = 0;
+    let simulationTimer = null;
+    let simulationActive = false;
+    let deadlockPulse = null;
+    let deadlockState = { active: false, nodes: [], edges: [] };
+    let deadlockSignature = '';
+    let selectedSourceNodeId = null;
+    let selectedEdgeId = null;
+    let tickCount = 0;
+    let actionCount = 0;
+    let lastStepAt = 0;
+    let currentStepId = 0;
+    let hasNarratedCurrentStep = false;
+    let simIntervalMs = 1000;
+    const clickStepDelayMs = 420;
+    const profileStorageKey = 'ipc-debugger-profiles-v2';
+    const resourceDefaults = {
+      kind: 'mutex',
+      capacity: 1
+    };
+    const completionSlicesBeforeRelease = 3;
+    const simPolicy = {
+      scheduler: 'fifo',
+      rrCursor: 0
+    };
+    const eventLog = [];
+    let selectedNodeId = null;
+    let isRestoringSnapshot = false;
+    let liveModeActive = false;
+    let liveSocket = null;
+    let liveGraphInitialized = false;
+    const connectState = {
+      active: false,
+      sourceNodeId: null,
+      targetNodeId: null
+    };
+
+    const els = {
+      addProcess: document.getElementById('btnAddProcess'),
+      addResource: document.getElementById('btnAddResource'),
+      run: document.getElementById('btnRun'),
+      tools: document.getElementById('btnTools'),
+      reset: document.getElementById('btnReset'),
+      alert: document.getElementById('deadlockAlert'),
+      narration: document.getElementById('topNarration'),
+      graphWrap: document.getElementById('graphWrap'),
+      previewLine: document.getElementById('previewLine'),
+      tooltip: document.getElementById('tooltip'),
+      drawer: document.getElementById('toolsDrawer'),
+      profileInput: document.getElementById('profileInput'),
+      profileSelect: document.getElementById('profileSelect'),
+      saveProfile: document.getElementById('btnSaveProfile'),
+      loadProfile: document.getElementById('btnLoadProfile'),
+      deleteProfile: document.getElementById('btnDeleteProfile'),
+      exportLogs: document.getElementById('btnExportLogs'),
+      liveMode: document.getElementById('btnLiveMode'),
+      schedulerSelect: document.getElementById('schedulerSelect'),
+      speedRange: document.getElementById('speedRange'),
+      speedLabel: document.getElementById('speedLabel'),
+      recoverDeadlock: document.getElementById('btnRecoverDeadlock'),
+      presetCycle: document.getElementById('btnPresetCycle'),
+      presetSafe: document.getElementById('btnPresetSafe')
+    };
+
+    const cy = cytoscape({
+      container: document.getElementById('cy'),
+      elements: [],
+      minZoom: 0.5,
+      maxZoom: 3.5,
+      userPanningEnabled: true,
+      userZoomingEnabled: true,
+      boxSelectionEnabled: false,
+      style: [
+        {
+          selector: 'node.process',
+          style: {
+            shape: 'round-rectangle',
+            'background-color': '#1f2937',
+            'label': 'data(label)',
+            color: '#ffffff',
+            'text-valign': 'center',
+            'text-halign': 'center',
+            'font-size': 13,
+            'font-weight': 700,
+            width: 152,
+            height: 88,
+            'overlay-padding': 10,
+            'overlay-opacity': 0,
+            'border-width': 1.5,
+            'border-color': '#0f172a',
+            'text-margin-y': 0,
+            'text-wrap': 'wrap',
+            'text-max-width': 126
+          }
+        },
+        {
+          selector: 'node.resource',
+          style: {
+            shape: 'round-rectangle',
+            'background-color': '#374151',
+            'label': 'data(label)',
+            color: '#ffffff',
+            'text-valign': 'center',
+            'text-halign': 'center',
+            'font-size': 13,
+            'font-weight': 700,
+            width: 152,
+            height: 88,
+            'overlay-padding': 10,
+            'overlay-opacity': 0,
+            'border-width': 1.5,
+            'border-color': '#0f172a',
+            'text-margin-y': 0,
+            'text-wrap': 'wrap',
+            'text-max-width': 126
+          }
+        },
+        {
+          selector: 'node.live-process',
+          style: {
+            'background-color': '#0f172a',
+            'border-color': '#2563eb',
+            'border-width': 2,
+            width: 168,
+            height: 94,
+            'font-size': 12,
+            'text-max-width': 140,
+            'z-index': 18
+          }
+        },
+        {
+          selector: 'node.live-resource',
+          style: {
+            'background-color': '#1f2937',
+            'border-color': '#0ea5e9',
+            'border-width': 2,
+            width: 176,
+            height: 96,
+            'font-size': 12,
+            'text-max-width': 146,
+            'z-index': 18
+          }
+        },
+        {
+          selector: 'node.runnable',
+          style: {
+            'background-color': '#111827',
+            'border-color': '#1d4ed8'
+          }
+        },
+        {
+          selector: 'node.waiting',
+          style: {
+            'background-color': '#1f2937',
+            'border-color': '#f59e0b'
+          }
+        },
+        {
+          selector: 'node.blocked',
+          style: {
+            'background-color': '#374151',
+            'border-color': '#dc2626'
+          }
+        },
+        {
+          selector: 'node.available',
+          style: {
+            'background-color': '#374151',
+            'border-color': '#10b981'
+          }
+        },
+        {
+          selector: 'node.full',
+          style: {
+            'background-color': '#374151',
+            'border-color': '#f59e0b'
+          }
+        },
+        {
+          selector: 'edge.request',
+          style: {
+            width: 2.6,
+            'line-color': '#111111',
+            'target-arrow-color': '#111111',
+            'target-arrow-shape': 'triangle',
+            'curve-style': 'bezier',
+            'source-endpoint': 'outside-to-node',
+            'target-endpoint': 'outside-to-node',
+            'control-point-step-size': 90,
+            'control-point-distance': 110,
+            'control-point-weight': 0.5,
+            'arrow-scale': 1.05,
+            opacity: 0.88
+          }
+        },
+        {
+          selector: 'edge.allocation',
+          style: {
+            width: 3,
+            'line-color': '#111111',
+            'target-arrow-color': '#111111',
+            'target-arrow-shape': 'triangle',
+            'curve-style': 'bezier',
+            'source-endpoint': 'outside-to-node',
+            'target-endpoint': 'outside-to-node',
+            'control-point-step-size': 90,
+            'control-point-distance': 110,
+            'control-point-weight': 0.5,
+            'arrow-scale': 1.1,
+            opacity: 0.92
+          }
+        },
+        {
+          selector: 'edge.pending-edge',
+          style: {
+            width: 2.4,
+            'line-color': '#64748b',
+            'line-style': 'dashed',
+            'line-dash-pattern': [8, 6],
+            opacity: 0.9,
+            'target-arrow-shape': 'none',
+            'curve-style': 'bezier'
+          }
+        },
+        {
+          selector: 'edge.flowing-edge',
+          style: {
+            width: 5.2,
+            'line-color': '#f59e0b',
+            'target-arrow-color': '#f59e0b',
+            'target-arrow-shape': 'triangle',
+            'curve-style': 'bezier',
+            opacity: 1,
+            'z-index': 998
+          }
+        },
+        {
+          selector: 'edge.live-metric',
+          style: {
+            width: 'mapData(weight, 0, 100, 1.2, 7.2)',
+            'line-color': '#111111',
+            'target-arrow-color': '#111111',
+            'target-arrow-shape': 'triangle',
+            'curve-style': 'bezier',
+            'arrow-scale': 0.9,
+            opacity: 'mapData(weight, 0, 100, 0.25, 0.95)',
+            'z-index': 8
+          }
+        },
+        {
+          selector: '.deadlock-edge',
+          style: {
+            'line-color': '#dc2626',
+            'target-arrow-color': '#dc2626',
+            width: 4,
+            'line-style': 'dashed',
+            'line-dash-pattern': [10, 7]
+          }
+        },
+        {
+          selector: '.deadlock-node',
+          style: {
+            'border-color': '#ef4444',
+            'border-width': 5,
+            'background-blacken': -0.3,
+            opacity: 1
+          }
+        },
+        {
+          selector: 'node.highlighted',
+          style: {
+            'border-color': '#f59e0b',
+            'border-width': 4,
+            'background-blacken': -0.15,
+            'z-index': 999
+          }
+        },
+        {
+          selector: 'edge.highlighted',
+          style: {
+            width: 4.4,
+            'line-color': '#f59e0b',
+            'target-arrow-color': '#f59e0b',
+            opacity: 1,
+            'z-index': 999
+          }
+        },
+        {
+          selector: '.connect-source',
+          style: {
+            'border-color': '#f59e0b',
+            'border-width': 5,
+            'background-blacken': -0.15
+          }
+        },
+        {
+          selector: '.connect-target-valid',
+          style: {
+            'border-color': '#f59e0b',
+            'border-width': 5,
+            'background-blacken': -0.15
+          }
+        },
+        {
+          selector: '.connect-target-invalid',
+          style: {
+            'border-color': '#ef4444',
+            'border-width': 5,
+            'background-blacken': -0.15
+          }
+        }
+      ],
+      layout: {
+        name: 'cose',
+        animate: true,
+        animationDuration: 480,
+        fit: true,
+        padding: 36,
+        avoidOverlap: true,
+        nodeOverlap: 24,
+        nodeDimensionsIncludeLabels: true,
+        componentSpacing: 140,
+        nodeRepulsion: 5600,
+        idealEdgeLength: 140,
+        edgeElasticity: 150,
+        gravity: 0.18
+      }
+    });
+
+    function setNarrationVisible(visible) {
+      els.narration.classList.toggle('visible', visible);
+      if (!visible) {
+        els.narration.textContent = '';
+        els.narration.classList.remove('deadlock');
+      }
+    }
+
+    function updateNarration(message, type = 'info', force = false) {
+      if (!simulationActive && !force) {
+        return;
+      }
+      const stepPrefix = currentStepId > 0 ? `Step ${currentStepId}: ` : (actionCount > 0 ? `Step ${actionCount}: ` : '');
+      const output = `${stepPrefix}${message}`;
+      els.narration.textContent = output;
+      els.narration.classList.toggle('deadlock', type === 'deadlock');
+      const consoleMethod = type === 'deadlock' ? console.warn : console.info;
+      consoleMethod(`[IPC] ${output}`);
+    }
+
+    function logEvent(message, type = 'info', refs = [], countAsStep = true, forceNarration = false) {
+      if (countAsStep && simulationActive && currentStepId === 0) {
+        actionCount += 1;
+        currentStepId = actionCount;
+      }
+
+      const isWithinActiveStep = simulationActive && currentStepId > 0;
+      const shouldNarrate = forceNarration || !isWithinActiveStep || !hasNarratedCurrentStep;
+      if (shouldNarrate) {
+        updateNarration(message, type, forceNarration);
+        if (isWithinActiveStep) {
+          hasNarratedCurrentStep = true;
+        }
+      }
+
+      eventLog.unshift({
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        ts: new Date().toLocaleTimeString([], { hour12: false }),
+        message,
+        type,
+        refs: [...refs]
+      });
+      if (eventLog.length > 180) {
+        eventLog.length = 180;
+      }
+      if (refs.length) {
+        highlightRefs(refs);
+      }
+    }
+
+    function highlightRefs(refs = []) {
+      if (!refs.length) {
+        return;
+      }
+
+      clearHighlights();
+      refs.forEach((id) => {
+        const element = cy.getElementById(id);
+        if (element.length) {
+          element.addClass('highlighted');
+          element.animate({ style: { 'background-blacken': -0.15 } }, { duration: 200 });
+        }
+      });
+    }
+
+    function cloneSerializableState() {
+      const processState = processIds
+        .filter((pid) => Boolean(processes[pid]))
+        .map((pid) => ({
+          id: pid,
+          holding: Array.from(processes[pid].holding),
+          waiting: Array.from(processes[pid].waiting),
+          cooldown: processes[pid].cooldown,
+          priority: Number(processes[pid].priority) || 1,
+          waitAge: Number(processes[pid].waitAge) || 0,
+          lastDispatchTick: Number(processes[pid].lastDispatchTick) || 0
+        }));
+
+      const resourceState = resourceIds
+        .filter((rid) => Boolean(resources[rid]))
+        .map((rid) => ({
+          id: rid,
+          queue: [...resources[rid].queue],
+          holders: Array.from(resources[rid].holders || []),
+          kind: resources[rid].kind || 'mutex',
+          capacity: Number(resources[rid].capacity) || 1
+        }));
+
+      const nodes = cy.nodes().map((n) => ({
+        id: n.id(),
+        data: { ...n.data() },
+        classes: n.classes(),
+        position: { ...n.position() }
+      }));
+
+      const edges = cy.edges().map((e) => ({
+        data: { ...e.data() },
+        classes: e.classes()
+      }));
+
+      return {
+        processState,
+        resourceState,
+        eventQueue: eventQueue.map((evt) => ({ ...evt })),
+        processCounter,
+        resourceCounter,
+        tickCount,
+        actionCount,
+        nodes,
+        edges,
+        simulationActive,
+        simIntervalMs,
+        scheduler: simPolicy.scheduler,
+        rrCursor: simPolicy.rrCursor,
+        deadlockSignature,
+        deadlockState: {
+          active: deadlockState.active,
+          nodes: [...deadlockState.nodes],
+          edges: [...deadlockState.edges]
+        },
+        eventLog: eventLog.map((entry) => ({ ...entry, refs: [...entry.refs] }))
+      };
+    }
+
+    function restoreSerializedState(snapshot) {
+      if (!snapshot) {
+        return;
+      }
+
+      isRestoringSnapshot = true;
+
+      Object.keys(processes).forEach((k) => delete processes[k]);
+      Object.keys(resources).forEach((k) => delete resources[k]);
+      processIds.length = 0;
+      resourceIds.length = 0;
+      eventQueue.length = 0;
+      cy.elements().remove();
+
+      processCounter = Number(snapshot.processCounter) || 0;
+      resourceCounter = Number(snapshot.resourceCounter) || 0;
+      tickCount = Number(snapshot.tickCount) || 0;
+      actionCount = Number(snapshot.actionCount) || 0;
+      currentStepId = 0;
+
+      (snapshot.processState || []).forEach((entry) => {
+        processIds.push(entry.id);
+        processes[entry.id] = {
+          holding: new Set(entry.holding || []),
+          waiting: new Set(entry.waiting || []),
+          cooldown: Number(entry.cooldown) || 0,
+          priority: Number(entry.priority) || 1,
+          waitAge: Number(entry.waitAge) || 0,
+          rrSlice: 0,
+          lastDispatchTick: Number(entry.lastDispatchTick) || 0
+        };
+      });
+
+      (snapshot.resourceState || []).forEach((entry) => {
+        resourceIds.push(entry.id);
+        resources[entry.id] = {
+          queue: Array.isArray(entry.queue) ? [...entry.queue] : [],
+          holders: new Set(entry.holders || []),
+          kind: entry.kind || 'mutex',
+          capacity: Math.max(1, Number(entry.capacity) || 1)
+        };
+      });
+
+      (snapshot.nodes || []).forEach((node) => {
+        cy.add({
+          group: 'nodes',
+          data: { ...node.data },
+          classes: node.classes,
+          position: { ...node.position }
+        });
+      });
+
+      (snapshot.edges || []).forEach((edge) => {
+        cy.add({
+          group: 'edges',
+          data: { ...edge.data },
+          classes: edge.classes
+        });
+      });
+
+      (snapshot.eventQueue || []).forEach((evt) => eventQueue.push({ ...evt }));
+
+      simIntervalMs = Math.max(250, Number(snapshot.simIntervalMs) || 1000);
+      simPolicy.scheduler = snapshot.scheduler || 'fifo';
+      simPolicy.rrCursor = Number(snapshot.rrCursor) || 0;
+      deadlockSignature = snapshot.deadlockSignature || '';
+      deadlockState = snapshot.deadlockState || { active: false, nodes: [], edges: [] };
+
+      eventLog.length = 0;
+      (snapshot.eventLog || []).forEach((entry) => {
+        eventLog.push({ ...entry, refs: [...(entry.refs || [])] });
+      });
+
+      if (snapshot.simulationActive) {
+        runSimulation();
+      } else {
+        simulationActive = false;
+        if (simulationTimer) {
+          clearInterval(simulationTimer);
+          simulationTimer = null;
+        }
+        els.run.textContent = 'Run Simulation';
+      }
+
+      detectDeadlock();
+      updateStats();
+      refreshViewport();
+      isRestoringSnapshot = false;
+    }
+
+    function loadProfiles() {
+      try {
+        return JSON.parse(localStorage.getItem(profileStorageKey) || '{}');
+      } catch {
+        return {};
+      }
+    }
+
+    function saveProfiles(map) {
+      localStorage.setItem(profileStorageKey, JSON.stringify(map));
+    }
+
+    function refreshProfileSelect() {
+      const profiles = loadProfiles();
+      const names = Object.keys(profiles).sort((a, b) => a.localeCompare(b));
+      els.profileSelect.innerHTML = '';
+      names.forEach((name) => {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        els.profileSelect.appendChild(option);
+      });
+      if (!names.length) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = 'No profiles';
+        els.profileSelect.appendChild(option);
+      }
+    }
+
+    function updateStats() {
+      if (els.speedLabel) {
+        els.speedLabel.textContent = `${simIntervalMs}ms`;
+      }
+      if (els.schedulerSelect) {
+        els.schedulerSelect.value = simPolicy.scheduler;
+      }
+      if (!liveModeActive) {
+        refreshNodeLabels();
+      }
+    }
+
+    function connectLiveSocket() {
+      if (liveSocket && (liveSocket.readyState === WebSocket.OPEN || liveSocket.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      liveSocket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+      liveSocket.addEventListener('open', () => {
+        if (liveModeActive) {
+          liveSocket.send(JSON.stringify({ type: 'live:mode', enabled: true }));
+        }
+      });
+
+      liveSocket.addEventListener('message', (evt) => {
+        let payload;
+        try {
+          payload = JSON.parse(evt.data);
+        } catch {
+          return;
+        }
+
+        if (!payload || payload.type !== 'live:update' || !payload.payload) {
+          return;
+        }
+
+        if (liveModeActive) {
+          renderLiveGraph(payload.payload);
+        }
+      });
+
+      liveSocket.addEventListener('close', () => {
+        liveSocket = null;
+        if (liveModeActive) {
+          // Reconnect while live mode is enabled.
+          window.setTimeout(connectLiveSocket, 1200);
+        }
+      });
+    }
+
+    function setLiveMode(enabled) {
+      const next = Boolean(enabled);
+      liveModeActive = next;
+      liveGraphInitialized = false;
+      els.liveMode.textContent = `Live Mode: ${next ? 'On' : 'Off'}`;
+
+      if (next) {
+        if (simulationActive) {
+          runSimulation();
+        }
+        eventQueue.length = 0;
+        Object.keys(processes).forEach((k) => delete processes[k]);
+        Object.keys(resources).forEach((k) => delete resources[k]);
+        processIds.length = 0;
+        resourceIds.length = 0;
+        cy.elements().remove();
+        clearConnectionClasses();
+        clearSelectedSource();
+        clearSelectedEdge();
+        hideAlert();
+        stopDeadlockPulse();
+        deadlockState = { active: false, nodes: [], edges: [] };
+        deadlockSignature = '';
+        setNarrationVisible(true);
+        updateNarration('Live host mode enabled: streaming laptop processes.', 'info', true);
+      } else {
+        if (liveSocket && liveSocket.readyState === WebSocket.OPEN) {
+          liveSocket.send(JSON.stringify({ type: 'live:mode', enabled: false }));
+        }
+        resetSimulation();
+        seedInitialGraph();
+      }
+
+      connectLiveSocket();
+      if (liveSocket && liveSocket.readyState === WebSocket.OPEN) {
+        liveSocket.send(JSON.stringify({ type: 'live:mode', enabled: next }));
+      }
+      updateStats();
+    }
+
+    function upsertLiveNode(nodeId, classes, data, position) {
+      const existing = cy.getElementById(nodeId);
+      if (existing.length) {
+        existing.data(data);
+        existing.classes(classes);
+        existing.animate({ position }, { duration: 420 });
+        return;
+      }
+
+      const node = cy.add({
+        group: 'nodes',
+        data,
+        classes,
+        position,
+      });
+      node.style({ opacity: 0 });
+      node.animate({ style: { opacity: 1 } }, { duration: 260 });
+    }
+
+    function upsertLiveEdge(edgeId, source, target, weight) {
+      const existing = cy.getElementById(edgeId);
+      if (existing.length) {
+        existing.data('weight', weight);
+        return;
+      }
+      cy.add({
+        group: 'edges',
+        data: {
+          id: edgeId,
+          source,
+          target,
+          type: 'live',
+          weight,
+        },
+        classes: 'live-metric',
+      });
+    }
+
+    function renderLiveGraph(snapshot) {
+      if (!snapshot || !snapshot.processes) {
+        return;
+      }
+
+      const width = cy.width() || 1200;
+      const height = cy.height() || 780;
+
+      const resourcesLive = [
+        { id: 'LR_CPU', key: 'cpu', label: 'CPU' },
+        { id: 'LR_MEM', key: 'memory', label: 'MEM' },
+        { id: 'LR_DISK', key: 'disk', label: 'DISK' },
+        { id: 'LR_NET', key: 'network', label: 'NET' },
+        { id: 'LR_THR', key: 'threads', label: 'THR' },
+      ];
+
+      const processesLive = [...snapshot.processes]
+        .sort((a, b) => (b.cpuPercent + b.memoryPercent) - (a.cpuPercent + a.memoryPercent))
+        .slice(0, 14);
+
+      const keepNodes = new Set();
+      const keepEdges = new Set();
+
+      const processLeftX = Math.max(170, width * 0.28);
+      const resourceRightX = Math.min(width - 170, width * 0.74);
+      const pGap = Math.max(66, Math.floor((height - 120) / Math.max(1, processesLive.length)));
+
+      processesLive.forEach((proc, idx) => {
+        const pidNode = `LP_${proc.pid}`;
+        keepNodes.add(pidNode);
+
+        const label = `${proc.name}\nPID ${proc.pid} CPU ${proc.cpuPercent.toFixed(1)}% MEM ${proc.memoryPercent.toFixed(1)}%`;
+        upsertLiveNode(
+          pidNode,
+          'process live-process',
+          {
+            id: pidNode,
+            label,
+            kind: 'live-process',
+            pid: proc.pid,
+            cpuPercent: proc.cpuPercent,
+            memoryPercent: proc.memoryPercent,
+            memoryBytes: proc.memoryBytes,
+            threads: proc.threads,
+            ioPercent: proc.ioPercent,
+            networkPercent: proc.networkPercent,
+            name: proc.name,
+          },
+          { x: processLeftX, y: 88 + idx * pGap }
+        );
+
+        const metrics = [
+          { key: 'cpuPercent', rid: 'LR_CPU' },
+          { key: 'memoryPercent', rid: 'LR_MEM' },
+          { key: 'ioPercent', rid: 'LR_DISK' },
+          { key: 'networkPercent', rid: 'LR_NET' },
+          { key: 'threads', rid: 'LR_THR', max: 200 },
+        ];
+
+        metrics.forEach((metric) => {
+          const raw = Number(proc[metric.key]) || 0;
+          const weight = metric.max ? Math.min(100, (raw / metric.max) * 100) : Math.min(100, raw);
+          if (weight < 4) {
+            return;
+          }
+
+          const eid = `LE_${metric.rid}_${pidNode}`;
+          keepEdges.add(eid);
+          upsertLiveEdge(eid, metric.rid, pidNode, Number(weight.toFixed(2)));
+        });
+      });
+
+      resourcesLive.forEach((res, idx) => {
+        keepNodes.add(res.id);
+        const used = Number((snapshot.resources && snapshot.resources[res.key] && snapshot.resources[res.key].usedPercent) || 0);
+        const label = `${res.label}\n${used.toFixed(1)}%`;
+        upsertLiveNode(
+          res.id,
+          'resource live-resource',
+          {
+            id: res.id,
+            label,
+            kind: 'live-resource',
+            usedPercent: used,
+            resourceLabel: res.label,
+          },
+          { x: resourceRightX, y: 104 + idx * Math.max(90, Math.floor((height - 180) / resourcesLive.length)) }
+        );
+      });
+
+      cy.nodes().forEach((node) => {
+        if ((node.hasClass('live-process') || node.hasClass('live-resource')) && !keepNodes.has(node.id())) {
+          cy.remove(node);
+        }
+      });
+
+      cy.edges('.live-metric').forEach((edge) => {
+        if (!keepEdges.has(edge.id())) {
+          cy.remove(edge);
+        }
+      });
+
+      if (!liveGraphInitialized) {
+        cy.fit(cy.elements(), 60);
+        liveGraphInitialized = true;
+      }
+
+      updateNarration(
+        `Live mode: ${processesLive.length} processes | CPU ${snapshot.host.cpuTotalPercent}% | MEM ${snapshot.host.memoryPercent}%`,
+        'info',
+        true
+      );
+    }
+
+    function refreshNodeLabels() {
+      if (liveModeActive) {
+        return;
+      }
+
+      cy.nodes().forEach((node) => {
+        const id = node.id();
+        if (id.startsWith('P')) {
+          const process = processes[id];
+          if (!process) {
+            return;
+          }
+
+          const heldCount = process.holding.size;
+          const waitCount = process.waiting.size;
+          const status = deadlockState.active && deadlockState.nodes.includes(id)
+            ? 'DEADLOCK'
+            : waitCount > 0
+              ? 'WAIT'
+              : heldCount > 0
+                ? 'RUN'
+                : 'READY';
+          node.data('label', `${id}\n${status} H${heldCount} W${waitCount}`);
+          node.removeClass('available full');
+          node.addClass(waitCount > 0 ? 'waiting' : 'runnable');
+          return;
+        }
+
+        const resource = resources[id];
+        if (!resource) {
+          return;
+        }
+
+        const available = resourceAvailableSlots(id);
+        const capacity = resource.capacity || 1;
+        const status = deadlockState.active && deadlockState.nodes.includes(id)
+          ? 'DEADLOCK'
+          : available > 0
+            ? 'FREE'
+            : 'FULL';
+        node.data('label', `${id}\n${status} ${capacity - available}/${capacity}`);
+        node.removeClass('runnable waiting blocked');
+        node.addClass(available > 0 ? 'available' : 'full');
+      });
+    }
+
+    function clearHighlights() {
+      cy.elements('.highlighted').removeClass('highlighted');
+    }
+
+    function getNodeCount() {
+      return cy.nodes().length;
+    }
+
+    function nextSpawnPosition(kind) {
+      const nodes = cy.nodes();
+      const baseX = cy.width() / 2;
+      const baseY = cy.height() / 2;
+      const nodeWidth = 138;
+      const nodeHeight = 80;
+      const margin = 70;
+      const kindOffset = kind === 'resource' ? 160 : -160;
+
+      if (!nodes.length) {
+        return { x: baseX + kindOffset, y: baseY };
+      }
+
+      for (let ring = 0; ring < 24; ring += 1) {
+        const radius = 180 + ring * 70;
+        const slots = Math.max(8, ring * 4);
+
+        for (let slot = 0; slot < slots; slot += 1) {
+          const angle = (Math.PI * 2 * slot) / slots;
+          const x = baseX + Math.cos(angle) * radius + kindOffset;
+          const y = baseY + Math.sin(angle) * radius;
+
+          const overlaps = nodes.some((node) => {
+            const pos = node.position();
+            return Math.abs(pos.x - x) < nodeWidth + margin && Math.abs(pos.y - y) < nodeHeight + margin;
+          });
+
+          if (!overlaps) {
+            return { x, y };
+          }
+        }
+      }
+
+      return {
+        x: baseX + kindOffset + (nodes.length % 5) * 120,
+        y: baseY + Math.floor(nodes.length / 5) * 120
+      };
+    }
+
+    function centerGraph() {
+      const nodeCount = getNodeCount();
+
+      if (nodeCount === 0) {
+        cy.zoom(1);
+        cy.center();
+        return;
+      }
+
+      if (nodeCount === 1) {
+        cy.center();
+        cy.zoom(0.92);
+        return;
+      }
+
+      const padding = nodeCount <= 3 ? 80 : nodeCount <= 6 ? 56 : 42;
+      cy.fit(cy.elements(), padding);
+
+      if (cy.zoom() > 1.15) {
+        cy.zoom(1.15);
+        cy.center(cy.elements());
+      }
+    }
+
+    function refreshViewport() {
+      window.requestAnimationFrame(() => {
+        centerGraph();
+      });
+    }
+
+    function eventKey(event) {
+      return `${event.type}|${event.processId ?? ''}|${event.resourceId ?? ''}`;
+    }
+
+    function hasQueuedEventLike(event) {
+      const key = eventKey(event);
+      return eventQueue.some((queued) => eventKey(queued) === key);
+    }
+
+    function queueEvent(event) {
+      if (!event || !event.type) {
+        return false;
+      }
+
+      if (hasQueuedEventLike(event)) {
+        return false;
+      }
+
+      eventQueue.push(event);
+      updateStats();
+      return true;
+    }
+
+    function animateFlow(resourceId, processId) {
+      const resourceNode = cy.getElementById(resourceId);
+      const processNode = cy.getElementById(processId);
+      const edge = cy.getElementById(edgeId(resourceId, processId, 'allocation'));
+
+      if (edge.length) {
+        edge.addClass('flowing-edge');
+        edge.animate({ style: { width: 6.4, opacity: 1 } }, {
+          duration: 220,
+          complete: () => {
+            edge.animate({ style: { width: 5.2 } }, { duration: 220 });
+          }
+        });
+      }
+
+      if (resourceNode.length) {
+        resourceNode.animate({ style: { 'background-color': '#1f2937' } }, { duration: 180 });
+        resourceNode.animate({ style: { 'background-color': '#111111' } }, { delay: 180, duration: 220 });
+      }
+
+      if (processNode.length) {
+        processNode.animate({ style: { 'border-width': 6, 'border-color': '#f59e0b' } }, { duration: 180 });
+        processNode.animate({ style: { 'border-width': 2, 'border-color': '#000000' } }, { delay: 180, duration: 220 });
+      }
+    }
+
+    function startAllocationFlow(processId, resourceId) {
+      const process = processes[processId];
+      if (!process) {
+        return;
+      }
+      animateFlow(resourceId, processId);
+    }
+
+    function runLayout() {
+      refreshViewport();
+    }
+
+    function addProcess() {
+      processCounter += 1;
+      const id = `P${processCounter}`;
+      processIds.push(id);
+      processes[id] = {
+        holding: new Set(),
+        waiting: new Set(),
+        cooldown: 0,
+        priority: 1,
+        waitAge: 0,
+        rrSlice: 0,
+        lastDispatchTick: 0
+      };
+
+      const node = cy.add({
+        group: 'nodes',
+        data: { id, label: id, kind: 'process' },
+        classes: 'process',
+        position: nextSpawnPosition('process')
+      });
+
+      node.style({ width: 2, height: 2, opacity: 0 });
+      node.animate({ style: { width: 138, height: 80, opacity: 1 } }, { duration: 260 });
+
+      logEvent(`Process created: ${id}`, 'info', [id], false);
+      updateStats();
+      refreshViewport();
+      detectDeadlock();
+      return id;
+    }
+
+    function addResource() {
+      resourceCounter += 1;
+      const id = `R${resourceCounter}`;
+      resourceIds.push(id);
+
+      const defaultKind = resourceDefaults.kind || 'mutex';
+      const defaultCapacity = defaultKind === 'mutex' ? 1 : Math.max(1, Number(resourceDefaults.capacity) || 1);
+      resources[id] = {
+        queue: [],
+        holders: new Set(),
+        kind: defaultKind,
+        capacity: defaultCapacity
+      };
+
+      const node = cy.add({
+        group: 'nodes',
+        data: { id, label: id, kind: 'resource' },
+        classes: 'resource',
+        position: nextSpawnPosition('resource')
+      });
+
+      node.style({ width: 2, height: 2, opacity: 0 });
+      node.animate({ style: { width: 138, height: 80, opacity: 1 } }, { duration: 260 });
+
+      logEvent(`Resource created: ${id} (${defaultKind}${defaultCapacity > 1 ? ` x${defaultCapacity}` : ''})`, 'info', [id], false);
+      updateStats();
+      refreshViewport();
+      detectDeadlock();
+      return id;
+    }
+
+    function edgeId(source, target, type) {
+      return `${type}:${source}->${target}`;
+    }
+
+    function pendingEdgeId(source, target) {
+      return `pending:${source}->${target}`;
+    }
+
+    function hasEdge(source, target, type) {
+      return cy.getElementById(edgeId(source, target, type)).length > 0;
+    }
+
+    function removeEdge(source, target, type) {
+      const id = edgeId(source, target, type);
+      const edge = cy.getElementById(id);
+      if (edge.length) {
+        cy.remove(edge);
+      }
+    }
+
+    function createPendingEdge(source, target) {
+      if (
+        cy.getElementById(pendingEdgeId(source, target)).length ||
+        hasEdge(source, target, 'request') ||
+        hasEdge(source, target, 'allocation')
+      ) {
+        return;
+      }
+
+      cy.add({
+        group: 'edges',
+        data: {
+          id: pendingEdgeId(source, target),
+          source,
+          target,
+          type: 'pending'
+        },
+        classes: 'pending-edge'
+      });
+    }
+
+    function removePendingEdge(source, target) {
+      const pending = cy.getElementById(pendingEdgeId(source, target));
+      if (pending.length) {
+        cy.remove(pending);
+      }
+    }
+
+    function resourceAvailableSlots(resourceId) {
+      const resource = resources[resourceId];
+      if (!resource) {
+        return 0;
+      }
+      const used = resource.holders ? resource.holders.size : 0;
+      return Math.max(0, resource.capacity - used);
+    }
+
+    function resourceHasHolder(resourceId, processId) {
+      const resource = resources[resourceId];
+      return Boolean(resource && resource.holders && resource.holders.has(processId));
+    }
+
+    function hasQueuedEvent(type, processId, resourceId) {
+      return eventQueue.some((evt) => {
+        if (evt.type !== type) {
+          return false;
+        }
+        return evt.processId === processId && evt.resourceId === resourceId;
+      });
+    }
+
+    function sanitizeResourceQueue(resourceId) {
+      const resource = resources[resourceId];
+      if (!resource) {
+        return;
+      }
+
+      if (!(resource.holders instanceof Set)) {
+        resource.holders = new Set(Array.from(resource.holders || []));
+      }
+
+      resource.holders = new Set(Array.from(resource.holders).filter((pid) => Boolean(processes[pid])));
+      resource.capacity = Math.max(1, Number(resource.capacity) || 1);
+
+      const seen = new Set();
+      resource.queue = resource.queue.filter((pid) => {
+        if (!processes[pid]) {
+          return false;
+        }
+        if (resource.holders.has(pid)) {
+          return false;
+        }
+        if (seen.has(pid)) {
+          return false;
+        }
+        seen.add(pid);
+        return true;
+      });
+    }
+
+    function validateEngineState() {
+      processIds.forEach((pid) => {
+        const process = processes[pid];
+        if (!process) {
+          return;
+        }
+
+        process.waiting = new Set(Array.from(process.waiting).filter((rid) => Boolean(resources[rid])));
+        process.holding = new Set(
+          Array.from(process.holding).filter((rid) => Boolean(resources[rid]) && resources[rid].holders && resources[rid].holders.has(pid))
+        );
+      });
+
+      resourceIds.forEach((rid) => {
+        const resource = resources[rid];
+        if (!resource) {
+          return;
+        }
+
+        sanitizeResourceQueue(rid);
+      });
+    }
+
+    function createEdge(source, target, type) {
+      if (hasEdge(source, target, type)) {
+        return;
+      }
+
+      const id = edgeId(source, target, type);
+      const edge = cy.add({
+        group: 'edges',
+        data: { id, source, target, type },
+        classes: type
+      });
+
+      edge.style({ opacity: 0 });
+      edge.animate({ style: { opacity: 1 } }, { duration: 180 });
+      updateStats();
+    }
+
+    function queueRequest(processId, resourceId) {
+      if (hasQueuedEvent('request', processId, resourceId)) {
+        logEvent(`Request already queued ${processId} -> ${resourceId}`, 'info', [processId, resourceId], false);
+        return;
+      }
+
+      queueEvent({ type: 'request', processId, resourceId });
+      createPendingEdge(processId, resourceId);
+      logEvent(`Queued request ${processId} -> ${resourceId}`, 'info', [processId, resourceId]);
+    }
+
+    function requestResource(processId, resourceId) {
+      const process = processes[processId];
+      const resource = resources[resourceId];
+
+      if (!process || !resource) {
+        return;
+      }
+
+      process.cooldown = 2;
+
+      logEvent(`${processId} requested ${resourceId}`, 'info', [processId, resourceId]);
+
+      if (resourceAvailableSlots(resourceId) > 0 && !resourceHasHolder(resourceId, processId)) {
+        allocateResource(resourceId, processId);
+        return;
+      }
+
+      if (resourceHasHolder(resourceId, processId)) {
+        logEvent(`${resourceId} already allocated to ${processId}`, 'info', [processId, resourceId]);
+        return;
+      }
+
+      if (!process.waiting.has(resourceId)) {
+        process.waiting.add(resourceId);
+      }
+
+      if (!resource.queue.includes(processId)) {
+        resource.queue.push(processId);
+      }
+
+      createEdge(processId, resourceId, 'request');
+      logEvent(`${processId} waiting for ${resourceId}`, 'info', [processId, resourceId]);
+      detectDeadlock();
+    }
+
+    function allocateResource(resourceId, processId) {
+      const process = processes[processId];
+      const resource = resources[resourceId];
+
+      if (!process || !resource) {
+        return;
+      }
+
+      process.cooldown = 2;
+
+      if (resourceHasHolder(resourceId, processId)) {
+        logEvent(`Allocation ignored: ${processId} already holds ${resourceId}`, 'info', [resourceId, processId]);
+        process.waiting.delete(resourceId);
+        resource.queue = resource.queue.filter((p) => p !== processId);
+        removeEdge(processId, resourceId, 'request');
+        detectDeadlock();
+        return;
+      }
+
+      if (resourceAvailableSlots(resourceId) <= 0) {
+        const holderRefs = Array.from(resource.holders || []);
+        const blocker = holderRefs[0] || 'another process';
+        logEvent(`Allocation blocked: ${resourceId} is held by ${blocker}`, 'info', [resourceId, blocker, processId]);
+        if (!resource.queue.includes(processId)) {
+          resource.queue.push(processId);
+        }
+        process.waiting.add(resourceId);
+        createEdge(processId, resourceId, 'request');
+        detectDeadlock();
+        return;
+      }
+
+      resource.holders.add(processId);
+      process.holding.add(resourceId);
+      process.waitAge = 0;
+      process.rrSlice = 0;
+      process.waiting.delete(resourceId);
+      resource.queue = resource.queue.filter((p) => p !== processId);
+
+      removeEdge(processId, resourceId, 'request');
+      createEdge(resourceId, processId, 'allocation');
+      startAllocationFlow(processId, resourceId);
+
+      logEvent(`${resourceId} allocated to ${processId}`, 'info', [resourceId, processId]);
+      detectDeadlock();
+    }
+
+    function releaseResource(resourceId, releasingProcessId = null) {
+      const resource = resources[resourceId];
+      if (!resource || !resource.holders || resource.holders.size === 0) {
+        return;
+      }
+
+      const processId = releasingProcessId && resource.holders.has(releasingProcessId)
+        ? releasingProcessId
+        : Array.from(resource.holders)[0];
+      const process = processes[processId];
+      if (process) {
+        process.holding.delete(resourceId);
+      }
+
+      resource.holders.delete(processId);
+      removeEdge(resourceId, processId, 'allocation');
+
+      let nextProcessId = null;
+      while (resourceAvailableSlots(resourceId) > 0 && resource.queue.length > 0) {
+        const candidate = pickNextQueuedProcess(resource.queue);
+        if (!candidate) {
+          break;
+        }
+        resource.queue = resource.queue.filter((pid) => pid !== candidate);
+        const waitingProcess = processes[candidate];
+        if (waitingProcess && waitingProcess.waiting.has(resourceId) && !resourceHasHolder(resourceId, candidate)) {
+          nextProcessId = candidate;
+          break;
+        }
+      }
+
+      if (nextProcessId) {
+        queueEvent({ type: 'allocate', resourceId, processId: nextProcessId });
+        createPendingEdge(resourceId, nextProcessId);
+        logEvent(`${resourceId} released from ${processId} and queued for ${nextProcessId}`, 'info', [resourceId, processId, nextProcessId]);
+        updateStats();
+        return;
+      } else {
+        logEvent(`${resourceId} released from ${processId}`, 'info', [resourceId, processId]);
+      }
+
+      detectDeadlock();
+    }
+
+    function pickNextQueuedProcess(queue) {
+      const candidates = queue.filter((pid, idx) => queue.indexOf(pid) === idx && processes[pid]);
+      if (!candidates.length) {
+        return null;
+      }
+
+      if (simPolicy.scheduler === 'round-robin') {
+        const idx = simPolicy.rrCursor % candidates.length;
+        simPolicy.rrCursor = (simPolicy.rrCursor + 1) % Math.max(1, candidates.length);
+        return candidates[idx];
+      }
+
+      if (simPolicy.scheduler === 'priority-aging') {
+        const sorted = [...candidates].sort((a, b) => {
+          const ap = (processes[a].priority || 1) + (processes[a].waitAge || 0);
+          const bp = (processes[b].priority || 1) + (processes[b].waitAge || 0);
+          if (bp !== ap) {
+            return bp - ap;
+          }
+          return a.localeCompare(b);
+        });
+        return sorted[0];
+      }
+
+      return candidates[0];
+    }
+
+    function getRunnableProcesses() {
+      return processIds.filter((pid) => {
+        const process = processes[pid];
+        return Boolean(process) && process.waiting.size === 0;
+      });
+    }
+
+    function pickCpuProcess() {
+      const runnable = getRunnableProcesses();
+      if (!runnable.length) {
+        return null;
+      }
+
+      const runnableWithLocks = runnable.filter((pid) => processes[pid] && processes[pid].holding.size > 0);
+      const pool = runnableWithLocks.length ? runnableWithLocks : runnable;
+
+      if (simPolicy.scheduler === 'round-robin') {
+        const idx = simPolicy.rrCursor % pool.length;
+        simPolicy.rrCursor = (simPolicy.rrCursor + 1) % Math.max(1, pool.length);
+        return pool[idx];
+      }
+
+      if (simPolicy.scheduler === 'priority-aging') {
+        return [...pool].sort((a, b) => {
+          const ap = (processes[a].priority || 1) + (processes[a].waitAge || 0);
+          const bp = (processes[b].priority || 1) + (processes[b].waitAge || 0);
+          if (bp !== ap) {
+            return bp - ap;
+          }
+          const ad = Number(processes[a].lastDispatchTick) || 0;
+          const bd = Number(processes[b].lastDispatchTick) || 0;
+          if (ad !== bd) {
+            return ad - bd;
+          }
+          return a.localeCompare(b);
+        })[0];
+      }
+
+      return [...pool].sort((a, b) => {
+        const ad = Number(processes[a].lastDispatchTick) || 0;
+        const bd = Number(processes[b].lastDispatchTick) || 0;
+        if (ad !== bd) {
+          return ad - bd;
+        }
+        return a.localeCompare(b);
+      })[0];
+    }
+
+    function maybeCompleteCriticalSection(processId) {
+      const process = processes[processId];
+      if (!process || process.waiting.size > 0 || process.holding.size === 0) {
+        return false;
+      }
+
+      process.rrSlice = (process.rrSlice || 0) + 1;
+      if (process.rrSlice < completionSlicesBeforeRelease) {
+        return false;
+      }
+
+      // Simulate process completion of a critical section and lock release.
+      const rid = Array.from(process.holding)[0];
+      process.rrSlice = 0;
+      releaseResource(rid, processId);
+      logEvent(`${processId} completed work and released ${rid}`, 'info', [processId, rid], false, true);
+      return true;
+    }
+
+    function stopSimulationWithMessage(message, type = 'info') {
+      if (simulationTimer) {
+        clearInterval(simulationTimer);
+        simulationTimer = null;
+      }
+      simulationActive = false;
+      els.run.textContent = 'Run Simulation';
+      setNarrationVisible(true);
+      updateNarration(message, type, true);
+    }
+
+    function hasPendingWork() {
+      if (eventQueue.length > 0) {
+        return true;
+      }
+
+      const queuedWaiters = resourceIds.some((rid) => {
+        const resource = resources[rid];
+        return Boolean(resource) && Array.isArray(resource.queue) && resource.queue.length > 0;
+      });
+      if (queuedWaiters) {
+        return true;
+      }
+
+      const processBlockedOrHolding = processIds.some((pid) => {
+        const process = processes[pid];
+        return Boolean(process) && (process.waiting.size > 0 || process.holding.size > 0);
+      });
+
+      return processBlockedOrHolding;
+    }
+
+    function processEvent(evt) {
+      if (!evt || !evt.type) {
+        return;
+      }
+
+      if (evt.type === 'request') {
+        if (!processes[evt.processId] || !resources[evt.resourceId]) {
+          logEvent(`Dropped stale request ${evt.processId} -> ${evt.resourceId}`, 'info', [], false, true);
+          return;
+        }
+        removePendingEdge(evt.processId, evt.resourceId);
+        requestResource(evt.processId, evt.resourceId);
+      }
+      if (evt.type === 'allocate') {
+        if (!processes[evt.processId] || !resources[evt.resourceId]) {
+          logEvent(`Dropped stale allocation ${evt.resourceId} -> ${evt.processId}`, 'info', [], false, true);
+          return;
+        }
+        removePendingEdge(evt.resourceId, evt.processId);
+        allocateResource(evt.resourceId, evt.processId);
+      }
+      if (evt.type === 'release') {
+        if (!resources[evt.resourceId]) {
+          logEvent(`Dropped stale release ${evt.resourceId}`, 'info', [], false, true);
+          return;
+        }
+        releaseResource(evt.resourceId, evt.processId || null);
+      }
+    }
+
+    function queueResolvableAllocation() {
+      for (let i = 0; i < resourceIds.length; i += 1) {
+        const rid = resourceIds[i];
+        const resource = resources[rid];
+        if (!resource || resourceAvailableSlots(rid) <= 0 || !resource.queue.length) {
+          continue;
+        }
+
+        const ordered = resource.queue.filter((pid, idx) => resource.queue.indexOf(pid) === idx);
+        const nextPid = pickNextQueuedProcess(ordered.filter((pid) => {
+          const process = processes[pid];
+          return Boolean(process) && process.waiting.has(rid);
+        }));
+        if (!nextPid) {
+          continue;
+        }
+
+        if (hasQueuedEvent('allocate', nextPid, rid)) {
+          continue;
+        }
+
+        queueEvent({ type: 'allocate', resourceId: rid, processId: nextPid });
+        createPendingEdge(rid, nextPid);
+        logEvent(`System queued grant: ${rid} -> ${nextPid}`, 'info', [rid, nextPid], false);
+        return true;
+      }
+
+      return false;
+    }
+
+    function simulationTick() {
+      tickCount += 1;
+      hasNarratedCurrentStep = false;
+      validateEngineState();
+
+      processIds.forEach((pid) => {
+        const process = processes[pid];
+        if (!process) {
+          return;
+        }
+
+        if (process.cooldown > 0) {
+          process.cooldown -= 1;
+        }
+
+        if (process.waiting.size > 0) {
+          process.waitAge = Math.min(12, (process.waitAge || 0) + 1);
+        } else {
+          process.waitAge = 0;
+        }
+      });
+
+      if (eventQueue.length > 0) {
+        const next = eventQueue.shift();
+        currentStepId = actionCount + 1;
+        actionCount = currentStepId;
+        processEvent(next);
+        currentStepId = 0;
+        updateStats();
+        return;
+      }
+
+      if (queueResolvableAllocation()) {
+        updateStats();
+        return;
+      }
+
+      if (!hasPendingWork()) {
+        stopSimulationWithMessage('Simulation complete: no pending work.', 'info');
+        updateStats();
+        return;
+      }
+
+      const deadlocked = detectDeadlock();
+      if (deadlocked) {
+        stopSimulationWithMessage('CPU halted: deadlock detected. Use Recover or adjust edges.', 'deadlock');
+        updateStats();
+        return;
+      }
+
+      const runnable = getRunnableProcesses();
+      const waitingProcesses = processIds.filter((pid) => processes[pid] && processes[pid].waiting.size > 0);
+      if (waitingProcesses.length > 0 && runnable.length === 0) {
+        updateNarration(`CPU idle: waiting for resource release (${waitingProcesses.join(', ')})`, 'info', true);
+        updateStats();
+        return;
+      }
+
+      const dispatched = pickCpuProcess();
+      if (dispatched) {
+        currentStepId = actionCount + 1;
+        actionCount = currentStepId;
+        processes[dispatched].lastDispatchTick = tickCount;
+        logEvent(`CPU dispatched ${dispatched} (time slice)`, 'info', [dispatched], false, true);
+        maybeCompleteCriticalSection(dispatched);
+        currentStepId = 0;
+      } else {
+        updateNarration('CPU idle: no runnable processes.', 'info', true);
+      }
+
+      updateStats();
+    }
+
+    function stepSimulation() {
+      if (liveModeActive) {
+        updateNarration('Live mode is active. Disable Live Mode to step simulation.', 'info', true);
+        return;
+      }
+      simulationTick();
+    }
+
+    function runSimulation() {
+      if (liveModeActive) {
+        updateNarration('Live mode is active. Disable Live Mode to run simulation.', 'info', true);
+        return;
+      }
+
+      if (simulationActive) {
+        simulationActive = false;
+        if (simulationTimer) {
+          clearInterval(simulationTimer);
+          simulationTimer = null;
+        }
+        els.run.textContent = 'Run Simulation';
+        setNarrationVisible(false);
+        clearHighlights();
+        return;
+      }
+
+      simulationActive = true;
+      actionCount = 0;
+      if (simulationTimer) {
+        clearInterval(simulationTimer);
+      }
+      simulationTimer = setInterval(() => {
+        simulationTick();
+      }, simIntervalMs);
+      els.run.textContent = 'Stop Simulation';
+      setNarrationVisible(true);
+      logEvent('Simulation running.', 'info', [], false, true);
+      if (eventQueue.length === 0) {
+        updateNarration('Auto stepping active. Tap canvas or press S for manual step.', 'info', true);
+      }
+      updateStats();
+    }
+
+    function resetSimulation() {
+      simulationActive = false;
+      if (simulationTimer) {
+        clearInterval(simulationTimer);
+        simulationTimer = null;
+      }
+      els.run.textContent = 'Run Simulation';
+      lastStepAt = 0;
+      cancelConnection();
+
+      Object.keys(processes).forEach((k) => delete processes[k]);
+      Object.keys(resources).forEach((k) => delete resources[k]);
+      processIds.length = 0;
+      resourceIds.length = 0;
+      eventQueue.length = 0;
+
+      processCounter = 0;
+      resourceCounter = 0;
+
+      deadlockState = { active: false, nodes: [], edges: [] };
+      deadlockSignature = '';
+      stopDeadlockPulse();
+      tickCount = 0;
+      currentStepId = 0;
+      setNarrationVisible(false);
+      clearHighlights();
+
+      cy.elements().remove();
+      hideAlert();
+      hideTooltip();
+      updateStats();
+      actionCount = 0;
+      logEvent('Simulation reset. Build a new scenario.', 'info', [], false);
+    }
+
+    function buildAdjacency() {
+      const adjacency = {};
+      const edgeMap = {};
+
+      cy.nodes().forEach((n) => {
+        adjacency[n.id()] = [];
+      });
+
+      cy.edges().forEach((e) => {
+        if (e.data('type') === 'pending') {
+          return;
+        }
+        const s = e.source().id();
+        const t = e.target().id();
+        if (!adjacency[s]) {
+          adjacency[s] = [];
+        }
+        adjacency[s].push(t);
+        edgeMap[`${s}->${t}`] = e.id();
+      });
+
+      return { adjacency, edgeMap };
+    }
+
+    function detectDeadlock() {
+      if (liveModeActive) {
+        return false;
+      }
+
+      const { adjacency, edgeMap } = buildAdjacency();
+      const visited = new Set();
+      const inStack = new Set();
+      const path = [];
+
+      let cycleNodes = [];
+
+      function dfs(node) {
+        visited.add(node);
+        inStack.add(node);
+        path.push(node);
+
+        const nextNodes = adjacency[node] || [];
+        for (let i = 0; i < nextNodes.length; i += 1) {
+          const next = nextNodes[i];
+
+          if (!visited.has(next)) {
+            if (dfs(next)) {
+              return true;
+            }
+          } else if (inStack.has(next)) {
+            const idx = path.lastIndexOf(next);
+            cycleNodes = path.slice(idx);
+            return true;
+          }
+        }
+
+        path.pop();
+        inStack.delete(node);
+        return false;
+      }
+
+      const allNodes = Object.keys(adjacency);
+      for (let i = 0; i < allNodes.length; i += 1) {
+        const n = allNodes[i];
+        if (!visited.has(n) && dfs(n)) {
+          break;
+        }
+      }
+
+      cy.elements('.deadlock-edge').removeClass('deadlock-edge');
+      cy.elements('.deadlock-node').removeClass('deadlock-node');
+
+      if (cycleNodes.length === 0) {
+        if (deadlockState.active) {
+          logEvent('Deadlock resolved', 'info', deadlockState.nodes);
+        }
+        deadlockState = { active: false, nodes: [], edges: [] };
+        deadlockSignature = '';
+        hideAlert();
+        stopDeadlockPulse();
+        refreshNodeLabels();
+        updateStats();
+        return false;
+      }
+
+      const cycleEdges = [];
+      for (let i = 0; i < cycleNodes.length; i += 1) {
+        const src = cycleNodes[i];
+        const tgt = cycleNodes[(i + 1) % cycleNodes.length];
+        const edgeIdRef = edgeMap[`${src}->${tgt}`];
+        if (edgeIdRef) {
+          cycleEdges.push(edgeIdRef);
+          cy.getElementById(edgeIdRef).addClass('deadlock-edge');
+        }
+      }
+
+      cycleNodes.forEach((nodeId) => {
+        cy.getElementById(nodeId).addClass('deadlock-node');
+      });
+
+      const signature = cycleNodes.join('>');
+      deadlockState = { active: true, nodes: cycleNodes, edges: cycleEdges };
+      showAlert(`Deadlock detected involving ${cycleNodes.join(' -> ')}`);
+      if (deadlockSignature !== signature) {
+        logEvent(`Deadlock detected involving ${cycleNodes.join(' -> ')}`, 'deadlock', [...cycleNodes, ...cycleEdges]);
+        deadlockSignature = signature;
+      }
+      startDeadlockPulse();
+      refreshNodeLabels();
+      updateStats();
+      return true;
+    }
+
+    function startDeadlockPulse() {
+      stopDeadlockPulse();
+      let pulseUp = false;
+      deadlockPulse = setInterval(() => {
+        pulseUp = !pulseUp;
+        const width = pulseUp ? 5 : 3.5;
+        cy.elements('.deadlock-edge').style('width', width);
+        cy.elements('.deadlock-node').style('background-blacken', pulseUp ? -0.35 : -0.15);
+      }, 340);
+    }
+
+    function stopDeadlockPulse() {
+      if (deadlockPulse) {
+        clearInterval(deadlockPulse);
+        deadlockPulse = null;
+      }
+    }
+
+    function showAlert(message) {
+      els.alert.textContent = message;
+      els.alert.classList.add('show');
+    }
+
+    function hideAlert() {
+      els.alert.classList.remove('show');
+    }
+
+    function tooltipTextForNode(id) {
+      if (liveModeActive) {
+        const node = cy.getElementById(id);
+        if (!node.length) {
+          return id;
+        }
+        if (node.data('kind') === 'live-process') {
+          return `${node.data('name')} (PID ${node.data('pid')})\nCPU: ${Number(node.data('cpuPercent') || 0).toFixed(1)}%\nMEM: ${Number(node.data('memoryPercent') || 0).toFixed(1)}%\nThreads: ${Number(node.data('threads') || 0)}\nI/O: ${Number(node.data('ioPercent') || 0).toFixed(1)}%\nNET: ${Number(node.data('networkPercent') || 0).toFixed(1)}%`;
+        }
+        if (node.data('kind') === 'live-resource') {
+          return `${node.data('resourceLabel')}\nUsed: ${Number(node.data('usedPercent') || 0).toFixed(1)}%`;
+        }
+      }
+
+      if (id.startsWith('P')) {
+        const p = processes[id];
+        const holding = p && p.holding.size ? Array.from(p.holding).join(', ') : 'None';
+        const waiting = p && p.waiting.size ? Array.from(p.waiting).join(', ') : 'None';
+        const priority = p ? p.priority || 1 : 1;
+        const age = p ? p.waitAge || 0 : 0;
+        return `Process ${id}\nHolding: ${holding}\nWaiting: ${waiting}\nPriority: ${priority}\nWait age: ${age}`;
+      }
+
+      const r = resources[id];
+      const allocated = r && r.holders && r.holders.size ? Array.from(r.holders).join(', ') : 'None';
+      const queue = r && r.queue.length ? r.queue.join(', ') : 'None';
+      const kind = r ? r.kind || 'mutex' : 'mutex';
+      const capacity = r ? r.capacity || 1 : 1;
+      const available = r ? resourceAvailableSlots(id) : 0;
+      return `Resource ${id}\nType: ${kind}\nCapacity: ${capacity}\nAvailable: ${available}\nAllocated to: ${allocated}\nQueue: ${queue}`;
+    }
+
+    function showTooltip(text, renderedPos) {
+      els.tooltip.textContent = text;
+      els.tooltip.style.left = `${renderedPos.x}px`;
+      els.tooltip.style.top = `${renderedPos.y}px`;
+      els.tooltip.classList.add('show');
+    }
+
+    function hideTooltip() {
+      els.tooltip.classList.remove('show');
+    }
+
+    function setPreviewLine(x1, y1, x2, y2, visible) {
+      els.previewLine.setAttribute('x1', x1);
+      els.previewLine.setAttribute('y1', y1);
+      els.previewLine.setAttribute('x2', x2);
+      els.previewLine.setAttribute('y2', y2);
+      els.previewLine.setAttribute('opacity', visible ? '1' : '0');
+    }
+
+    function setPreviewLineColor(color) {
+      els.previewLine.setAttribute('stroke', color);
+    }
+
+    function allowedConnection(sourceId, targetId) {
+      if (sourceId === targetId) {
+        return false;
+      }
+      if (sourceId.startsWith('P') && targetId.startsWith('R')) {
+        return true;
+      }
+      if (sourceId.startsWith('R') && targetId.startsWith('P')) {
+        return true;
+      }
+      return false;
+    }
+
+    function clearConnectionClasses() {
+      cy.elements('.connect-source').removeClass('connect-source');
+      cy.elements('.connect-target-valid').removeClass('connect-target-valid');
+      cy.elements('.connect-target-invalid').removeClass('connect-target-invalid');
+    }
+
+    function clearSelectedSource() {
+      selectedSourceNodeId = null;
+      cy.elements('.connect-source').removeClass('connect-source');
+    }
+
+    function clearSelectedEdge() {
+      selectedEdgeId = null;
+      cy.edges('.highlighted').removeClass('highlighted');
+    }
+
+    function nodeNearPosition(renderedPosition, sourceNodeId) {
+      let best = null;
+      let bestDistance = Infinity;
+
+      cy.nodes().forEach((node) => {
+        if (node.id() === sourceNodeId) {
+          return;
+        }
+
+        const nPos = node.renderedPosition();
+        const dx = nPos.x - renderedPosition.x;
+        const dy = nPos.y - renderedPosition.y;
+        const distance = Math.hypot(dx, dy);
+        const threshold = node.hasClass('resource') ? 84 : 80;
+
+        if (distance <= threshold && distance < bestDistance) {
+          best = node;
+          bestDistance = distance;
+        }
+      });
+
+      return best;
+    }
+
+    function applyConnection(sourceId, targetId) {
+      if (liveModeActive) {
+        updateNarration('Connections are disabled in Live Mode.', 'info', true);
+        return;
+      }
+
+      if (!allowedConnection(sourceId, targetId)) {
+        logEvent(`Invalid connection blocked: ${sourceId} -> ${targetId}`, 'info', [sourceId, targetId]);
+        return;
+      }
+
+      if (sourceId.startsWith('P')) {
+        queueRequest(sourceId, targetId);
+      } else {
+        if (hasQueuedEvent('allocate', targetId, sourceId)) {
+          logEvent(`Allocation already queued ${sourceId} -> ${targetId}`, 'info', [sourceId, targetId], false);
+          return;
+        }
+        queueEvent({ type: 'allocate', resourceId: sourceId, processId: targetId });
+        createPendingEdge(sourceId, targetId);
+        logEvent(`Manual allocation queued ${sourceId} -> ${targetId}`, 'info', [sourceId, targetId]);
+      }
+
+      refreshViewport();
+    }
+
+    function beginConnection(sourceNodeId) {
+      const sourceNode = cy.getElementById(sourceNodeId);
+      if (!sourceNode.length) {
+        return;
+      }
+
+      connectState.active = true;
+      connectState.sourceNodeId = sourceNodeId;
+      connectState.targetNodeId = null;
+
+      clearSelectedSource();
+      clearSelectedEdge();
+      clearConnectionClasses();
+      sourceNode.addClass('connect-source');
+
+      const p = sourceNode.renderedPosition();
+      setPreviewLine(p.x, p.y, p.x, p.y, true);
+      setPreviewLineColor('#f59e0b');
+    }
+
+    function updateConnection(renderedPosition) {
+      if (!connectState.active || !connectState.sourceNodeId) {
+        return;
+      }
+
+      const sourceNode = cy.getElementById(connectState.sourceNodeId);
+      if (!sourceNode.length) {
+        return;
+      }
+
+      const start = sourceNode.renderedPosition();
+      setPreviewLine(start.x, start.y, renderedPosition.x, renderedPosition.y, true);
+
+      cy.elements('.connect-target-valid').removeClass('connect-target-valid');
+      cy.elements('.connect-target-invalid').removeClass('connect-target-invalid');
+
+      const candidate = nodeNearPosition(renderedPosition, connectState.sourceNodeId);
+      connectState.targetNodeId = candidate ? candidate.id() : null;
+
+      if (!candidate) {
+        setPreviewLineColor('#f59e0b');
+        return;
+      }
+
+      const valid = allowedConnection(connectState.sourceNodeId, candidate.id());
+      candidate.addClass(valid ? 'connect-target-valid' : 'connect-target-invalid');
+      setPreviewLineColor(valid ? '#f59e0b' : '#ef4444');
+    }
+
+    function finishConnection() {
+      if (!connectState.active || !connectState.sourceNodeId) {
+        return;
+      }
+
+      const source = connectState.sourceNodeId;
+      const target = connectState.targetNodeId;
+
+      if (target) {
+        applyConnection(source, target);
+      }
+
+      connectState.active = false;
+      connectState.sourceNodeId = null;
+      connectState.targetNodeId = null;
+      clearConnectionClasses();
+      setPreviewLine(0, 0, 0, 0, false);
+      setPreviewLineColor('#94a3b8');
+    }
+
+    function cancelConnection() {
+      connectState.active = false;
+      connectState.sourceNodeId = null;
+      connectState.targetNodeId = null;
+      clearConnectionClasses();
+      setPreviewLine(0, 0, 0, 0, false);
+      setPreviewLineColor('#94a3b8');
+    }
+
+    function removeSelectedEdge() {
+      if (liveModeActive) {
+        return;
+      }
+
+      if (!selectedEdgeId) {
+        return;
+      }
+
+      const edge = cy.getElementById(selectedEdgeId);
+      if (!edge.length) {
+        selectedEdgeId = null;
+        return;
+      }
+
+      const { source, target, type } = edge.data();
+
+      if (type === 'allocation') {
+        releaseResource(source, target);
+      } else {
+        const process = processes[source];
+        const resource = resources[target];
+
+        if (process) {
+          process.waiting.delete(target);
+        }
+        if (resource) {
+          resource.queue = resource.queue.filter((p) => p !== source);
+        }
+
+        cy.remove(edge);
+        logEvent(`Removed request edge ${source} -> ${target}`, 'info', [source, target]);
+        detectDeadlock();
+      }
+
+      selectedEdgeId = null;
+      updateStats();
+    }
+
+    function removeNode(nodeId) {
+      if (liveModeActive) {
+        return;
+      }
+
+      const node = cy.getElementById(nodeId);
+      if (!node.length) {
+        return;
+      }
+
+      if (nodeId.startsWith('P')) {
+        const process = processes[nodeId];
+        if (process) {
+          Array.from(process.holding).forEach((rid) => {
+            releaseResource(rid, nodeId);
+          });
+        }
+
+        resourceIds.forEach((rid) => {
+          const resource = resources[rid];
+          if (resource) {
+            resource.queue = resource.queue.filter((pid) => pid !== nodeId);
+            if (resource.holders) {
+              resource.holders.delete(nodeId);
+            }
+          }
+        });
+
+        delete processes[nodeId];
+        const processIdx = processIds.indexOf(nodeId);
+        if (processIdx >= 0) {
+          processIds.splice(processIdx, 1);
+        }
+      } else if (nodeId.startsWith('R')) {
+        const resource = resources[nodeId];
+        if (resource) {
+          Array.from(resource.holders || []).forEach((pid) => {
+            const process = processes[pid];
+            if (process) {
+              process.holding.delete(nodeId);
+              process.waiting.delete(nodeId);
+            }
+          });
+
+          processIds.forEach((pid) => {
+            const process = processes[pid];
+            if (process) {
+              process.waiting.delete(nodeId);
+              process.holding.delete(nodeId);
+            }
+          });
+        }
+
+        delete resources[nodeId];
+        const resourceIdx = resourceIds.indexOf(nodeId);
+        if (resourceIdx >= 0) {
+          resourceIds.splice(resourceIdx, 1);
+        }
+      }
+
+      eventQueue.forEach((evt, idx) => {
+        if (evt.processId === nodeId || evt.resourceId === nodeId) {
+          eventQueue[idx] = null;
+        }
+      });
+
+      for (let i = eventQueue.length - 1; i >= 0; i -= 1) {
+        if (!eventQueue[i]) {
+          eventQueue.splice(i, 1);
+        }
+      }
+
+      cy.remove(node);
+      cy.edges().forEach((edge) => {
+        const data = edge.data();
+        if (data.source === nodeId || data.target === nodeId) {
+          cy.remove(edge);
+        }
+      });
+
+      clearSelectedSource();
+      clearSelectedEdge();
+      selectedNodeId = null;
+      logEvent(`Removed node ${nodeId}`, 'info', [], false);
+      detectDeadlock();
+      updateStats();
+    }
+
+    function editNodeProperties(nodeId) {
+      if (liveModeActive) {
+        return;
+      }
+
+      if (!nodeId) {
+        return;
+      }
+
+      if (nodeId.startsWith('P')) {
+        const process = processes[nodeId];
+        if (!process) {
+          return;
+        }
+        const nextPriority = prompt(`Set priority for ${nodeId} (1-9)`, String(process.priority || 1));
+        if (nextPriority === null) {
+          return;
+        }
+        process.priority = Math.min(9, Math.max(1, Number(nextPriority) || 1));
+        logEvent(`${nodeId} priority set to ${process.priority}`, 'info', [nodeId], false, true);
+      } else {
+        const resource = resources[nodeId];
+        if (!resource) {
+          return;
+        }
+
+        const nextKind = prompt(`Resource type for ${nodeId}: mutex | semaphore | mailbox`, resource.kind || 'mutex');
+        if (nextKind === null) {
+          return;
+        }
+        const normalized = ['mutex', 'semaphore', 'mailbox'].includes(nextKind.trim().toLowerCase())
+          ? nextKind.trim().toLowerCase()
+          : 'mutex';
+        resource.kind = normalized;
+
+        const capacityPrompt = prompt(`Capacity for ${nodeId} (${normalized === 'mutex' ? 'fixed to 1' : '>=1'})`, String(resource.capacity || 1));
+        if (capacityPrompt !== null) {
+          const nextCapacity = Math.max(1, Number(capacityPrompt) || 1);
+          resource.capacity = normalized === 'mutex' ? 1 : nextCapacity;
+        } else if (normalized === 'mutex') {
+          resource.capacity = 1;
+        }
+
+        while (resource.holders.size > resource.capacity) {
+          const pid = Array.from(resource.holders).pop();
+          resource.holders.delete(pid);
+          if (processes[pid]) {
+            processes[pid].holding.delete(nodeId);
+            if (!processes[pid].waiting.has(nodeId)) {
+              processes[pid].waiting.add(nodeId);
+            }
+            if (!resource.queue.includes(pid)) {
+              resource.queue.unshift(pid);
+            }
+            createEdge(pid, nodeId, 'request');
+          }
+          removeEdge(nodeId, pid, 'allocation');
+        }
+
+        logEvent(`${nodeId} set to ${resource.kind} (capacity ${resource.capacity})`, 'info', [nodeId], false, true);
+      }
+
+      detectDeadlock();
+      updateStats();
+    }
+
+    function recoverDeadlock() {
+      if (!deadlockState.active || !deadlockState.nodes.length) {
+        logEvent('No active deadlock to recover.', 'info', [], false, true);
+        return;
+      }
+
+      const cycleProcesses = deadlockState.nodes.filter((id) => id.startsWith('P') && processes[id]);
+      if (!cycleProcesses.length) {
+        logEvent('Deadlock recovery skipped: no process in cycle.', 'info', [], false, true);
+        return;
+      }
+
+      const victim = cycleProcesses.sort((a, b) => {
+        const ah = processes[a].holding.size;
+        const bh = processes[b].holding.size;
+        if (bh !== ah) {
+          return bh - ah;
+        }
+        return b.localeCompare(a);
+      })[0];
+
+      const held = Array.from(processes[victim].holding);
+      if (!held.length) {
+        logEvent(`Recovery selected ${victim}, but it holds no resources.`, 'info', [victim], false, true);
+        return;
+      }
+
+      held.forEach((rid) => releaseResource(rid, victim));
+      logEvent(`Recovery: released ${held.join(', ')} from ${victim}`, 'info', [victim, ...held], false, true);
+      detectDeadlock();
+      updateStats();
+    }
+
+    function applyPresetDeadlock() {
+      resetSimulation();
+      const p1 = addProcess();
+      const p2 = addProcess();
+      const r1 = addResource();
+      const r2 = addResource();
+
+      // Build the final cycle directly so preset state is deterministic.
+      allocateResource(r1, p1);
+      allocateResource(r2, p2);
+      requestResource(p1, r2);
+      requestResource(p2, r1);
+      detectDeadlock();
+      logEvent('Loaded preset: deadlock cycle.', 'info', [p1, p2, r1, r2], false, true);
+    }
+
+    function applyPresetSafe() {
+      resetSimulation();
+      const p1 = addProcess();
+      const p2 = addProcess();
+      const r1 = addResource();
+      const r2 = addResource();
+
+      allocateResource(r1, p1);
+      allocateResource(r2, p2);
+      releaseResource(r1, p1);
+      releaseResource(r2, p2);
+      detectDeadlock();
+      logEvent('Loaded preset: safe scenario.', 'info', [p1, p2, r1, r2], false, true);
+    }
+
+    function seedInitialGraph() {
+      if (processIds.length > 0 || resourceIds.length > 0) {
+        return;
+      }
+
+      const p1 = addProcess();
+      const p2 = addProcess();
+      const r1 = addResource();
+      const r2 = addResource();
+
+      // Minimal starter topology so graph is visible immediately.
+      allocateResource(r1, p1);
+      queueRequest(p2, r1);
+      queueRequest(p1, r2);
+      refreshViewport();
+      updateStats();
+    }
+
+    function saveCurrentProfile() {
+      const name = (els.profileInput.value || '').trim() || 'default';
+      const profiles = loadProfiles();
+      profiles[name] = {
+        savedAt: Date.now(),
+        state: cloneSerializableState()
+      };
+      saveProfiles(profiles);
+      refreshProfileSelect();
+      els.profileSelect.value = name;
+      logEvent(`Profile saved: ${name}`, 'info', [], false, true);
+    }
+
+    function loadSelectedProfile() {
+      const name = (els.profileSelect.value || '').trim() || (els.profileInput.value || '').trim();
+      if (!name) {
+        return;
+      }
+
+      const profiles = loadProfiles();
+      if (!profiles[name] || !profiles[name].state) {
+        logEvent(`Profile not found: ${name}`, 'info', [], false, true);
+        return;
+      }
+
+      restoreSerializedState(profiles[name].state);
+      logEvent(`Profile loaded: ${name}`, 'info', [], false, true);
+    }
+
+    function deleteSelectedProfile() {
+      const name = (els.profileSelect.value || '').trim();
+      if (!name) {
+        return;
+      }
+      const profiles = loadProfiles();
+      delete profiles[name];
+      saveProfiles(profiles);
+      refreshProfileSelect();
+      logEvent(`Profile deleted: ${name}`, 'info', [], false, true);
+    }
+
+    function exportLogsAndState() {
+      const payload = {
+        exportedAt: new Date().toISOString(),
+        logs: eventLog,
+        snapshot: cloneSerializableState()
+      };
+
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ipc-debugger-export-${Date.now()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      logEvent('Exported logs and current snapshot.', 'info', [], false, true);
+    }
+
+    cy.on('cxttapstart', 'node', (evt) => {
+      beginConnection(evt.target.id());
+    });
+
+    cy.on('mousemove', (evt) => {
+      if (!connectState.active) {
+        return;
+      }
+      updateConnection(evt.renderedPosition);
+    });
+
+    cy.on('cxttapend', () => {
+      finishConnection();
+    });
+
+    cy.on('tap', 'node', (evt) => {
+      if (liveModeActive) {
+        return;
+      }
+
+      if (connectState.active) {
+        return;
+      }
+
+      const node = evt.target;
+      selectedNodeId = node.id();
+      clearSelectedEdge();
+
+      if (!selectedSourceNodeId) {
+        selectedSourceNodeId = node.id();
+        clearConnectionClasses();
+        node.addClass('connect-source');
+        return;
+      }
+
+      if (selectedSourceNodeId === node.id()) {
+        clearSelectedSource();
+        return;
+      }
+
+      applyConnection(selectedSourceNodeId, node.id());
+      clearSelectedSource();
+      clearConnectionClasses();
+    });
+
+    cy.on('dbltap', 'node', (evt) => {
+      if (liveModeActive) {
+        return;
+      }
+      editNodeProperties(evt.target.id());
+    });
+
+    cy.on('tap', 'edge', (evt) => {
+      if (liveModeActive) {
+        return;
+      }
+
+      if (connectState.active) {
+        return;
+      }
+
+      clearSelectedSource();
+      clearConnectionClasses();
+      clearHighlights();
+      clearSelectedEdge();
+
+      selectedEdgeId = evt.target.id();
+      evt.target.addClass('highlighted');
+      logEvent(`Edge selected: ${selectedEdgeId}. Press Delete/Backspace to remove.`, 'info', [selectedEdgeId]);
+    });
+
+    cy.on('mouseover', 'node', (evt) => {
+      const n = evt.target;
+      const pos = n.renderedPosition();
+      showTooltip(tooltipTextForNode(n.id()), pos);
+    });
+
+    cy.on('mousemove', 'node', (evt) => {
+      const pos = evt.target.renderedPosition();
+      showTooltip(tooltipTextForNode(evt.target.id()), pos);
+    });
+
+    cy.on('mouseout', 'node', () => {
+      hideTooltip();
+    });
+
+    cy.on('tap', (evt) => {
+      if (simulationActive && evt.target === cy) {
+        const now = Date.now();
+        if (now - lastStepAt >= clickStepDelayMs) {
+          lastStepAt = now;
+          stepSimulation();
+        }
+      }
+
+      if (evt.target === cy) {
+        clearSelectedSource();
+        clearConnectionClasses();
+        clearSelectedEdge();
+        selectedNodeId = null;
+      }
+      clearHighlights();
+    });
+
+    document.addEventListener('keydown', (evt) => {
+      if (evt.key === 'Escape') {
+        cancelConnection();
+        clearSelectedSource();
+        clearConnectionClasses();
+        clearSelectedEdge();
+        hideTooltip();
+      }
+
+      if (evt.key === 'Delete' || evt.key === 'Backspace') {
+        if (selectedEdgeId) {
+          removeSelectedEdge();
+        } else if (selectedNodeId || selectedSourceNodeId) {
+          removeNode(selectedNodeId || selectedSourceNodeId);
+        }
+      }
+
+      if (evt.key.toLowerCase() === 'r' && !evt.repeat) {
+        runSimulation();
+      }
+
+      if (evt.key.toLowerCase() === 's' && !evt.repeat) {
+        stepSimulation();
+      }
+
+      if (evt.key.toLowerCase() === 't' && !evt.repeat) {
+        els.drawer.classList.toggle('open');
+      }
+
+      if (evt.key.toLowerCase() === 'k' && !evt.repeat) {
+        recoverDeadlock();
+      }
+
+    });
+
+    els.addProcess.addEventListener('click', addProcess);
+    els.addResource.addEventListener('click', addResource);
+    els.run.addEventListener('click', runSimulation);
+    els.reset.addEventListener('click', resetSimulation);
+    els.tools.addEventListener('click', () => {
+      els.drawer.classList.toggle('open');
+    });
+
+    els.saveProfile.addEventListener('click', saveCurrentProfile);
+    els.loadProfile.addEventListener('click', loadSelectedProfile);
+    els.deleteProfile.addEventListener('click', deleteSelectedProfile);
+    els.exportLogs.addEventListener('click', exportLogsAndState);
+    els.liveMode.addEventListener('click', () => setLiveMode(!liveModeActive));
+    els.recoverDeadlock.addEventListener('click', recoverDeadlock);
+    els.presetCycle.addEventListener('click', applyPresetDeadlock);
+    els.presetSafe.addEventListener('click', applyPresetSafe);
+
+    els.schedulerSelect.addEventListener('change', () => {
+      simPolicy.scheduler = els.schedulerSelect.value;
+      logEvent(`Scheduler set to ${simPolicy.scheduler}`, 'info', [], false, true);
+      updateStats();
+    });
+
+    els.speedRange.addEventListener('input', () => {
+      simIntervalMs = Math.max(250, Number(els.speedRange.value) || 1000);
+      if (simulationActive && simulationTimer) {
+        clearInterval(simulationTimer);
+        simulationTimer = setInterval(() => {
+          simulationTick();
+        }, simIntervalMs);
+      }
+      updateStats();
+    });
+
+    els.profileSelect.addEventListener('change', () => {
+      if (els.profileSelect.value) {
+        els.profileInput.value = els.profileSelect.value;
+      }
+    });
+
+    cy.on('pan zoom resize', () => {
+      if (connectState.active) {
+        const sourceNode = cy.getElementById(connectState.sourceNodeId);
+        if (sourceNode.length) {
+          const rendered = sourceNode.renderedPosition();
+          setPreviewLine(rendered.x, rendered.y, rendered.x, rendered.y, true);
+        }
+      }
+    });
+
+    cy.ready(refreshViewport);
+
+    setNarrationVisible(false);
+    refreshProfileSelect();
+    seedInitialGraph();
+    connectLiveSocket();
+    refreshNodeLabels();
+    updateStats();
+    logEvent('Ready. Add nodes and connect process/resource edges to simulate.', 'info', [], false);
+    updateStats();
+  </script>
+</body>
+</html>
