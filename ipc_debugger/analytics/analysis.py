@@ -21,32 +21,34 @@ def build_graph(logs): #takes input like [("P1", "P2"), ("P2", "P3"), ("P3", "P1
 
 #Deadlock work 
 def detect_deadlock(graph):
-    visited = set() #stores node we already visited, avoids repeating work
-    stack = set() #tracks current path
+    visited = set()
+    stack = []
 
     def dfs(node):
         if node in stack:
-            return True
+            cycle_index = stack.index(node)
+            return stack[cycle_index:] + [node]
         
         if node in visited:
-            return False
+            return None
         
         visited.add(node)
-        stack.add(node)
+        stack.append(node)
 
         for neighbor in graph.get(node, []):
-            if dfs(neighbor):
-                return True
+            cycle = dfs(neighbor)
+            if cycle:
+                return cycle
         
-        stack.remove(node)
-        return False
+        stack.pop()
+        return None
 
     for node in graph:
-        if dfs(node):
-            return True
+        cycle = dfs(node)
+        if cycle:
+            return cycle
 
-    return False
-
+    return None
     #Main function 
 def main():
     logs = read_logs()
@@ -54,12 +56,13 @@ def main():
 
     print("Graph:", graph)
 
-    if detect_deadlock(graph):
+    cycle = detect_deadlock(graph)
+
+    if cycle:
         print("Deadlock detected 💀")
+        print("Cycle:", " → ".join(cycle))
     else:
         print("No deadlock ✅")
-
-
 # Run program
 if __name__ == "__main__":
     main()
