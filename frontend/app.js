@@ -1,183 +1,451 @@
-const processNodeSlots = [
-  { top: "30%", left: "25%", icon: "terminal" },
-  { top: "30%", left: "75%", icon: "database" },
-  { top: "50%", left: "50%", icon: "settings_ethernet" },
-  { top: "85%", left: "50%", icon: "monitoring" },
-];
+const state = {
+  sim: null,
+  live: null,
+  socket: null,
+  liveEnabled: true,
+  terminalOpen: false,
+  history: {
+    threads: [],
+    memory: [],
+    disk: [],
+    latency: [],
+    network: [],
+  },
+};
 
-function el(id) {
-  return document.getElementById(id);
-}
+const HISTORY_LIMIT = 12;
+const el = (id) => document.getElementById(id);
 
-function fmtNumber(value, fallback = "0") {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) {
-    return fallback;
+function formatPercent(value, digits = 1) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) {
+    return `0.${'0'.repeat(digits)}%`;
   }
-  return Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 });
+  return `${n.toFixed(digits)}%`;
 }
 
-function buildProcessNodes(processes) {
-  const container = el("processNodes");
-  container.innerHTML = "";
+function formatBytes(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) {
+    return '0 B';
+  }
 
-  processes.forEach((proc, idx) => {
-    const slot = processNodeSlots[idx % processNodeSlots.length];
-    const stateColor = proc.state === "DEADLOCKED"
-      ? "#ef4444"
-      : proc.state === "WAITING"
-        ? "#f59e0b"
-        : proc.state === "TERMINATED"
-          ? "#6b7280"
-          : "#22c55e";
-
-    const node = document.createElement("div");
-    node.className = "absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-2 group";
-    node.style.top = slot.top;
-    node.style.left = slot.left;
-
-    node.innerHTML = `
-      <div class="w-16 h-16 rounded-full bg-primary flex items-center justify-center text-on-primary node-draggable node-pulse shadow-[0_8px_32px_-8px_rgba(0,0,0,0.3)] border-2 border-white/20">
-        <span class="material-symbols-outlined text-xl">${slot.icon}</span>
-      </div>
-      <div class="flex flex-col items-center">
-        <span class="font-mono text-[10px] font-bold bg-white px-2 py-0.5 rounded shadow-sm border border-outline-variant/30">PID: ${proc.pid}</span>
-        <span class="font-mono text-[9px] mt-1" style="color:${stateColor}">${proc.state}</span>
-        <span class="font-mono text-[8px] text-on-surface-variant">${proc.name}</span>
-      </div>
-    `;
-
-    container.appendChild(node);
-  });
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = n;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
-function buildChannels(report) {
-  const monitor = el("channelMonitor");
-  monitor.innerHTML = "";
-  const channels = Object.keys(report.channels || {});
+function formatSpeed(mbPerSec) {
+  const n = Number(mbPerSec);
+  return `${(Number.isFinite(n) ? n : 0).toFixed(1)} MB/s`;
+}
 
-  if (channels.length === 0) {
-    const row = document.createElement("div");
-    row.className = "text-xs font-mono text-on-surface-variant";
-    row.textContent = "No channels loaded.";
-    monitor.appendChild(row);
+function setText(id, value) {
+  const node = el(id);
+  if (node) {
+    node.textContent = value;
+  }
+}
+
+function setBar(id, value) {
+  const node = el(id);
+  if (!node) {
+    return;
+  }
+  const clamped = Math.max(0, Math.min(100, Number(value) || 0));
+  node.style.width = `${clamped}%`;
+}
+
+function pushHistory(key, value) {
+  const arr = state.history[key];
+  if (!arr) {
+    return;
+  }
+  arr.push(Math.max(0, Number(value) || 0));
+  while (arr.length > HISTORY_LIMIT) {
+    arr.shift();
+  }
+}
+
+function setSparkline(id, values, width = 100, height = 20) {
+  const node = el(id);
+  if (!node || !Array.isArray(values) || values.length === 0) {
     return;
   }
 
-  channels.forEach((channel) => {
-    const throughput = report.throughput_msg_s?.[channel] ?? 0;
-    const latency = report.latency_ms?.[channel] ?? 0;
+  const max = Math.max(...values, 1);
+  const min = Math.min(...values, 0);
+  const range = Math.max(1, max - min);
+  const step = values.length > 1 ? width / (values.length - 1) : width;
 
-    const row = document.createElement("div");
-    row.className = "flex justify-between items-center text-xs font-mono border-b border-outline-variant/10 pb-2";
-    row.innerHTML = `
-      <span class="text-on-surface-variant flex items-center gap-2">
-        <span class="w-1.5 h-1.5 rounded-full bg-secondary"></span> ${channel}
-      </span>
-      <span class="font-bold">${fmtNumber(throughput)} msg/s | ${fmtNumber(latency)} ms</span>
-    `;
-    monitor.appendChild(row);
-  });
+  const points = values
+    .map((value, idx) => {
+      const x = idx * step;
+      const y = height - (((value - min) / range) * (height - 2)) - 1;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(' ');
+
+  if (node.tagName.toLowerCase() === 'polyline') {
+    node.setAttribute('points', points);
+  } else if (node.tagName.toLowerCase() === 'path') {
+    node.setAttribute('d', `M${points.replace(/ /g, ' L')}`);
+  }
 }
 
-function buildTimeline(logs) {
-  const rows = el("timelineRows");
-  rows.innerHTML = "";
+function renderGraph() {
+  const graph = state.sim?.graph;
+  const nodesHost = el('ipcGraphNodes');
+  const edgesHost = el('ipcGraphEdges');
 
-  if (!logs || logs.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "font-mono text-xs text-on-surface-variant";
-    empty.textContent = "No events yet.";
-    rows.appendChild(empty);
+  if (!nodesHost || !edgesHost || !graph) {
     return;
   }
 
-  logs.slice(-20).reverse().forEach((evt) => {
-    const row = document.createElement("div");
-    row.className = "flex justify-between items-center rounded-md border border-outline-variant/20 bg-surface px-3 py-2";
-    row.innerHTML = `
-      <span class="font-mono text-[10px] text-on-surface-variant">${evt.ts_str}</span>
-      <span class="font-mono text-[10px] font-bold">P${evt.pid}</span>
-      <span class="font-mono text-[10px] uppercase">${evt.event_type}</span>
-      <span class="font-mono text-[10px]">${evt.channel_id}</span>
-      <span class="font-mono text-[10px] text-on-surface-variant truncate max-w-[34ch]">${evt.data}</span>
-    `;
-    rows.appendChild(row);
-  });
-}
+  nodesHost.innerHTML = '';
+  edgesHost.innerHTML = '';
 
-function render(report) {
-  const processDetails = report.process_details || [];
-  el("activeProcs").textContent = String(processDetails.length).padStart(2, "0");
-  el("ipcEvents").textContent = fmtNumber(report.logged_events, "0");
-  el("scenarioText").textContent = `Scenario: ${report.scenario || "Unknown"}`;
-  el("clusterLabel").textContent = `Live Topology Map - ${report.scenario || "Unknown"}`;
+  const graphWidth = Math.max(1, Number(graph.width) || 940);
+  const graphHeight = Math.max(1, Number(graph.height) || 360);
+  const positions = new Map();
 
-  const hasDeadlock = (report.deadlock_cycles || []).length > 0;
-  const deadlockStatus = el("deadlockStatus");
-  const deadlockIcon = el("deadlockIcon");
-  const deadlockBanner = el("deadlockBanner");
+  for (const node of graph.nodes || []) {
+    const x = (Number(node.x || 0) / graphWidth) * 100;
+    const y = (Number(node.y || 0) / graphHeight) * 100;
+    positions.set(node.id, { x, y });
 
-  if (hasDeadlock) {
-    deadlockStatus.textContent = `DETECTED (${report.deadlock_cycles.length} cycles)`;
-    deadlockStatus.className = "font-mono text-lg font-bold text-[#ef4444]";
-    deadlockIcon.textContent = "warning";
-    deadlockIcon.className = "material-symbols-outlined text-[#ef4444] text-3xl";
-    deadlockBanner.className = "bg-[#ef4444]/10 p-4 rounded-lg flex items-center justify-between border border-[#ef4444]/20";
-    el("uplinkText").textContent = "Deadlock Alert";
-  } else {
-    deadlockStatus.textContent = "NONE DETECTED";
-    deadlockStatus.className = "font-mono text-lg font-bold text-[#22c55e]";
-    deadlockIcon.textContent = "check_circle";
-    deadlockIcon.className = "material-symbols-outlined text-[#22c55e] text-3xl";
-    deadlockBanner.className = "bg-[#22c55e]/5 p-4 rounded-lg flex items-center justify-between border border-[#22c55e]/20";
-    el("uplinkText").textContent = report.completed ? "System Uplink Active" : "Scenario Timed Out";
-  }
+    const card = document.createElement('div');
+    card.className = 'absolute -translate-x-1/2 -translate-y-1/2 p-3 rounded-xl shadow-sm text-center min-w-[120px]';
+    card.style.left = `${x}%`;
+    card.style.top = `${y}%`;
 
-  buildProcessNodes(processDetails);
-  buildChannels(report);
-  buildTimeline(report.logs || []);
-}
+    const isProcess = node.type === 'process';
+    const isDeadlock = node.status === 'deadlock';
+    const isWaiting = node.status === 'waiting';
 
-async function fetchReport() {
-  const res = await fetch("/api/report", { cache: "no-store" });
-  if (!res.ok) {
-    throw new Error("Failed to fetch report");
-  }
-  const data = await res.json();
-  render(data);
-}
-
-async function runScenario() {
-  const scenario = el("scenarioSelect").value;
-  const delay = Number(el("delayInput").value || "20");
-
-  el("runBtn").disabled = true;
-  el("runBtn").textContent = "Running...";
-  try {
-    const res = await fetch("/api/run", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scenario, delay_ms: delay, timeout: 10.0 }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || "Scenario run failed");
+    if (isProcess) {
+      card.classList.add('bg-white', 'border-2', 'border-black');
+    } else {
+      card.classList.add('bg-surface-container-high', 'border', 'border-outline');
     }
-    render(data);
-  } catch (err) {
-    console.error(err);
-    alert(err.message || "Could not run scenario.");
-  } finally {
-    el("runBtn").disabled = false;
-    el("runBtn").textContent = "Run";
+
+    if (isDeadlock) {
+      card.classList.remove('border-outline');
+      card.classList.add('border-error', 'bg-error-container');
+    } else if (isWaiting) {
+      card.classList.add('bg-surface-container-lowest');
+    }
+
+    const kind = document.createElement('div');
+    kind.className = isProcess
+      ? 'text-[10px] uppercase font-bold text-tertiary'
+      : 'text-[10px] uppercase font-bold text-on-surface-variant';
+    kind.textContent = isProcess ? 'Process' : 'Resource';
+
+    const title = document.createElement('div');
+    title.className = 'text-sm font-bold';
+    title.textContent = node.label;
+
+    const subtitle = document.createElement('div');
+    subtitle.className = 'text-[10px] mt-1 opacity-70';
+    subtitle.textContent = node.subtitle || '';
+
+    card.appendChild(kind);
+    card.appendChild(title);
+    card.appendChild(subtitle);
+    nodesHost.appendChild(card);
+  }
+
+  for (const edge of graph.edges || []) {
+    const source = positions.get(edge.source);
+    const target = positions.get(edge.target);
+    if (!source || !target) {
+      continue;
+    }
+
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', `${source.x}%`);
+    line.setAttribute('y1', `${source.y}%`);
+    line.setAttribute('x2', `${target.x}%`);
+    line.setAttribute('y2', `${target.y}%`);
+    line.setAttribute('stroke-width', edge.type === 'allocation' ? '2.5' : '2');
+    line.setAttribute('stroke', edge.type === 'allocation' ? '#00358c' : '#ba1a1a');
+    line.setAttribute('opacity', edge.highlighted ? '0.95' : '0.5');
+    if (edge.type === 'request') {
+      line.setAttribute('stroke-dasharray', '5 4');
+    }
+    edgesHost.appendChild(line);
   }
 }
 
-el("runBtn").addEventListener("click", runScenario);
-el("refreshBtn").addEventListener("click", fetchReport);
-el("reportBtn").addEventListener("click", fetchReport);
+function renderMetrics() {
+  const simProcesses = Array.isArray(state.sim?.processes) ? state.sim.processes : [];
+  const liveProcesses = Array.isArray(state.live?.processes) ? state.live.processes : [];
+  const top = [...liveProcesses].sort((a, b) => Number(b.cpuPercent || 0) - Number(a.cpuPercent || 0));
+  const first = top[0];
+  const second = top[1];
 
-fetchReport().catch((err) => {
-  console.error(err);
-  alert("Could not load initial report. Start server with: python -m ipc_debugger.web_server");
-});
+  setText('masterKernelLabel', `IPC_KERNEL · ${simProcesses.length} PROC`);
+  setText('managerStatus', first ? `${first.id}_ACTIVE` : 'IDLE');
+  setText('managerPrimaryName', first ? first.name : 'NO_PROCESS');
+  setText('managerPrimaryPid', first ? String(first.pid) : '---');
+  setText('managerPrimaryCpu', first ? formatPercent(first.cpuPercent, 1) : '0.0%');
+  setText('managerSecondaryName', second ? second.name : 'NO_PROCESS');
+  setText('managerSecondaryPid', second ? String(second.pid) : '---');
+  setText('managerSecondaryCpu', second ? formatPercent(second.cpuPercent, 1) : '0.0%');
+
+  const totalThreads = liveProcesses.reduce((sum, process) => sum + Number(process.threads || 0), 0);
+  const memPercent = Number(state.live?.host?.memoryPercent || 0);
+  const diskPercent = Number(state.live?.resources?.disk?.usedPercent || 0);
+  const netPercent = Number(state.live?.resources?.network?.usedPercent || 0);
+  const cpuPercent = Number(state.live?.resources?.cpu?.usedPercent || 0);
+  const latency = Math.max(20, Math.round(220 - cpuPercent * 1.6));
+
+  pushHistory('threads', totalThreads);
+  pushHistory('memory', memPercent);
+  pushHistory('disk', diskPercent);
+  pushHistory('network', netPercent);
+  pushHistory('latency', latency);
+
+  setText('threadCountValue', `${totalThreads.toLocaleString()} ACTIVE`);
+  setSparkline('threadSparkline', state.history.threads);
+
+  setText('memoryFragmentationValue', formatPercent(memPercent * 0.8, 1));
+  setBar('memoryFragmentationBar', memPercent * 0.8);
+
+  setText('diskIoValue', formatSpeed(diskPercent * 2.2));
+  setSparkline('diskIoSparkline', state.history.disk);
+
+  setText('swapUsageValue', formatBytes((state.live?.host?.totalMemory || 0) * (memPercent / 100) * 0.45));
+  setBar('swapUsageBar', memPercent * 0.9);
+
+  setText('interruptLatencyValue', `${latency} μs`);
+  setSparkline('interruptLatencySparkline', state.history.latency);
+
+  setText('socketThroughputValue', `${(netPercent * 0.16).toFixed(1)} Gbps`);
+  setSparkline('socketThroughputSparkline', state.history.network);
+}
+
+function renderBanner() {
+  const analysis = state.sim?.analysis;
+  const banner = el('criticalBanner');
+  const icon = el('criticalBannerIcon');
+  if (!banner || !icon) {
+    return;
+  }
+
+  if (analysis?.state === 'DEADLOCK') {
+    banner.className = 'absolute top-8 left-1/2 -translate-x-1/2 bg-error-container text-on-error-container px-4 py-1 text-[10px] tracking-tighter uppercase font-bold flex items-center gap-2 border border-error animate-pulse z-40 rounded-full shadow-lg';
+    setText('criticalBannerText', analysis.detail || 'Deadlock detected');
+    icon.textContent = 'warning';
+    return;
+  }
+
+  if (analysis?.state === 'UNSAFE') {
+    banner.className = 'absolute top-8 left-1/2 -translate-x-1/2 bg-error-container text-on-error-container px-4 py-1 text-[10px] tracking-tighter uppercase font-bold flex items-center gap-2 border border-error z-40 rounded-full shadow-lg';
+    setText('criticalBannerText', analysis.detail || 'Unsafe state detected');
+    icon.textContent = 'report';
+    return;
+  }
+
+  if (analysis?.state === 'WAITING') {
+    banner.className = 'absolute top-8 left-1/2 -translate-x-1/2 bg-surface-container-low text-on-surface px-4 py-1 text-[10px] tracking-tighter uppercase font-bold flex items-center gap-2 border border-outline-variant z-40 rounded-full shadow-lg';
+    setText('criticalBannerText', analysis.detail || 'Waiting for resources');
+    icon.textContent = 'schedule';
+    return;
+  }
+
+  banner.className = 'absolute top-8 left-1/2 -translate-x-1/2 bg-surface-container-low text-on-surface px-4 py-1 text-[10px] tracking-tighter uppercase font-bold flex items-center gap-2 border border-outline-variant z-40 rounded-full shadow-lg';
+  setText('criticalBannerText', 'Normal execution');
+  icon.textContent = 'check_circle';
+}
+
+function renderButtons() {
+  const runButton = el('runSimulationButton');
+  const runText = runButton?.querySelector('span:last-child');
+  const runIcon = runButton?.querySelector('span:first-child');
+
+  if (runText) {
+    const running = Boolean(state.sim?.simulation?.running);
+    runText.textContent = running ? 'Pause Simulation' : 'Run Simulation';
+    if (runIcon) {
+      runIcon.textContent = running ? 'pause' : 'play_arrow';
+    }
+  }
+
+  const liveButton = el('liveModeButton');
+  const liveText = liveButton?.querySelector('span:last-child');
+  if (liveButton && liveText) {
+    const connected = state.socket?.readyState === WebSocket.OPEN;
+    const active = state.liveEnabled && connected;
+    liveText.textContent = active ? 'Live Mode On' : 'Live Mode Off';
+    liveButton.className = active
+      ? 'flex-1 flex flex-col items-center justify-center bg-neutral-800 text-white px-4 py-3 transition-all duration-75 scale-95 active:scale-90 rounded-xl'
+      : 'flex-1 flex flex-col items-center justify-center text-neutral-400 px-4 py-3 hover:text-white hover:bg-neutral-800 transition-all duration-75 scale-95 active:scale-90 rounded-xl';
+  }
+
+  const terminalText = el('terminalButton')?.querySelector('span:last-child');
+  if (terminalText) {
+    terminalText.textContent = state.terminalOpen ? 'Hide Logs' : 'Show Logs';
+  }
+}
+
+function renderLogOverlay() {
+  if (!state.terminalOpen) {
+    return;
+  }
+
+  const logs = Array.isArray(state.sim?.logs) ? state.sim.logs.slice(0, 3) : [];
+  const text = logs.map((entry) => `${entry.time} ${String(entry.type || 'info').toUpperCase()} ${entry.message}`).join(' | ');
+  setText('criticalBannerText', text || 'No recent events');
+}
+
+function render() {
+  renderGraph();
+  renderMetrics();
+  renderBanner();
+  renderButtons();
+  renderLogOverlay();
+}
+
+async function fetchJson(url, options = {}) {
+  const response = await fetch(url, {
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
+    ...options,
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `Request failed (${response.status})`);
+  }
+  return payload;
+}
+
+async function refreshState() {
+  state.sim = await fetchJson('/api/state', { cache: 'no-store' });
+  render();
+}
+
+function connectSocket() {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+  state.socket = socket;
+
+  socket.addEventListener('open', () => {
+    socket.send(JSON.stringify({ type: 'live:mode', enabled: state.liveEnabled }));
+    renderButtons();
+  });
+
+  socket.addEventListener('message', (event) => {
+    try {
+      const message = JSON.parse(event.data);
+      if (message.type === 'state:update') {
+        state.sim = message.payload;
+      }
+      if (message.type === 'live:update' && state.liveEnabled) {
+        state.live = message.payload;
+      }
+      render();
+    } catch {
+      // Ignore malformed payloads.
+    }
+  });
+
+  socket.addEventListener('close', () => {
+    renderButtons();
+    setTimeout(connectSocket, 1200);
+  });
+}
+
+async function addProcess() {
+  const payload = { priority: 1 + Math.floor(Math.random() * 5) };
+  await fetchJson('/api/process', { method: 'POST', body: JSON.stringify(payload) });
+  await refreshState();
+}
+
+async function addResource() {
+  const payload = { totalInstances: 1 + Math.floor(Math.random() * 3) };
+  await fetchJson('/api/resource', { method: 'POST', body: JSON.stringify(payload) });
+  await refreshState();
+}
+
+async function toggleSimulation() {
+  const running = Boolean(state.sim?.simulation?.running);
+  if (running) {
+    await fetchJson('/api/pause', { method: 'POST', body: '{}' });
+  } else {
+    await fetchJson('/api/start', {
+      method: 'POST',
+      body: JSON.stringify({ speed: 900, mode: 'realtime' }),
+    });
+  }
+  await refreshState();
+}
+
+function toggleLiveMode() {
+  state.liveEnabled = !state.liveEnabled;
+  if (state.socket && state.socket.readyState === WebSocket.OPEN) {
+    state.socket.send(JSON.stringify({ type: 'live:mode', enabled: state.liveEnabled }));
+  }
+  renderButtons();
+}
+
+async function handleTerminalToggle() {
+  state.terminalOpen = !state.terminalOpen;
+  if (state.terminalOpen) {
+    await fetchJson('/api/step', { method: 'POST', body: '{}' });
+    await refreshState();
+  } else {
+    render();
+  }
+}
+
+async function expandClusterView() {
+  await fetchJson('/api/step', { method: 'POST', body: '{}' });
+  await refreshState();
+}
+
+function wireControls() {
+  el('addProcessButton')?.addEventListener('click', () => {
+    addProcess().catch((error) => window.alert(error.message || 'Could not add process'));
+  });
+
+  el('addResourceButton')?.addEventListener('click', () => {
+    addResource().catch((error) => window.alert(error.message || 'Could not add resource'));
+  });
+
+  el('runSimulationButton')?.addEventListener('click', () => {
+    toggleSimulation().catch((error) => window.alert(error.message || 'Could not toggle simulation'));
+  });
+
+  el('liveModeButton')?.addEventListener('click', toggleLiveMode);
+
+  el('terminalButton')?.addEventListener('click', () => {
+    handleTerminalToggle().catch((error) => window.alert(error.message || 'Could not toggle logs'));
+  });
+
+  el('expandClusterView')?.addEventListener('click', () => {
+    expandClusterView().catch((error) => window.alert(error.message || 'Could not expand cluster view'));
+  });
+}
+
+async function init() {
+  wireControls();
+  connectSocket();
+  try {
+    await refreshState();
+  } catch (error) {
+    console.error(error);
+    window.alert('Could not load simulation state. Ensure the server is running and refresh.');
+  }
+}
+
+init();
