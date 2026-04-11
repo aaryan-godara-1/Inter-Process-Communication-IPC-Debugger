@@ -6,6 +6,8 @@ class Process {
     this.requestedResources = {};
     this.priority = priority;
     this.waitSteps = 0;
+    // CPU core assignments (0-indexed core IDs)
+    this.cpuCores = [];
   }
 
   hold(resourceId, amount = 1) {
@@ -33,6 +35,19 @@ class Process {
     this.requestedResources = {};
   }
 
+  assignCpuCore(coreId) {
+    if (!this.cpuCores.includes(coreId)) {
+      this.cpuCores.push(coreId);
+    }
+  }
+
+  releaseCpuCore(coreId) {
+    const index = this.cpuCores.indexOf(coreId);
+    if (index > -1) {
+      this.cpuCores.splice(index, 1);
+    }
+  }
+
   toJSON() {
     return {
       pid: this.pid,
@@ -41,6 +56,7 @@ class Process {
       requestedResources: { ...this.requestedResources },
       priority: this.priority,
       waitSteps: this.waitSteps,
+      cpuCores: [...this.cpuCores],
     };
   }
 }

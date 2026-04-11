@@ -18,16 +18,20 @@ async function collectWindowsProcesses(limit) {
     'powershell -NoProfile -Command',
     '"Get-Process |',
     'Sort-Object -Property WorkingSet64 -Descending |',
-    `Select-Object -First ${limit} `,
+    'Where-Object { $_.Id -gt 0 } |',
+    `Select-Object -First ${Number(limit)} `,
     '@{Name=\'pid\';Expression={$_.Id}},',
     '@{Name=\'name\';Expression={$_.ProcessName}},',
     '@{Name=\'cpuTime\';Expression={[double]($_.CPU)}},',
     '@{Name=\'workingSet\';Expression={[int64]$_.WorkingSet64}},',
-    '@{Name=\'threads\';Expression={$_.Threads.Count}} |',
+    '@{Name=\'threads\';Expression={$_.Threads.Count}},',
+    '@{Name=\'handles\';Expression={[int]$_.Handles}},',
+    '@{Name=\'ioReadBytes\';Expression={[double]$_.IOReadBytes}},',
+    '@{Name=\'ioWriteBytes\';Expression={[double]$_.IOWriteBytes}} |',
     'ConvertTo-Json -Compress"'
   ].join(' ');
 
-  const output = await execCommand(command);
+  const output = await execCommand(command, 900);
   if (!output.trim()) {
     return [];
   }
@@ -42,10 +46,53 @@ async function collectWindowsProcesses(limit) {
         cpuTime: Number(row.cpuTime) || 0,
         workingSet: Number(row.workingSet) || 0,
         threads: Number(row.threads) || 0,
+        handles: Number(row.handles) || 0,
+        ioReadBytes: Number(row.ioReadBytes) || 0,
+        ioWriteBytes: Number(row.ioWriteBytes) || 0,
       }))
       .filter((row) => row.pid > 0);
   } catch {
     return [];
+  }
+}
+
+async function collectWindowsSystemResourceMetrics() {
+  const command = [
+    'powershell -NoProfile -Command',
+    '"$disk=(Get-Counter \'\\PhysicalDisk(_Total)\\% Disk Time\' -ErrorAction SilentlyContinue).CounterSamples | Select-Object -First 1;',
+    '$netBytes=(Get-Counter \'\\Network Interface(*)\\Bytes Total/sec\' -ErrorAction SilentlyContinue).CounterSamples;',
+    '$netBandwidth=(Get-Counter \'\\Network Interface(*)\\Current Bandwidth\' -ErrorAction SilentlyContinue).CounterSamples;',
+    '$bytes=0; foreach($n in $netBytes){$bytes += [double]$n.CookedValue};',
+    '$band=0; foreach($b in $netBandwidth){$band += [double]$b.CookedValue};',
+    '[pscustomobject]@{',
+    'diskPercent=[math]::Round([double]$disk.CookedValue,1);',
+    'networkBytesPerSec=[math]::Round($bytes,1);',
+    'networkBandwidthBps=[math]::Round($band,1);',
+    '} | ConvertTo-Json -Compress"'
+  ].join(' ');
+
+  const output = await execCommand(command);
+  if (!output.trim()) {
+    return {
+      diskPercent: 0,
+      networkBytesPerSec: 0,
+      networkBandwidthBps: 0,
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(output);
+    return {
+      diskPercent: clampPercent(parsed.diskPercent),
+      networkBytesPerSec: Math.max(0, Number(parsed.networkBytesPerSec) || 0),
+      networkBandwidthBps: Math.max(0, Number(parsed.networkBandwidthBps) || 0),
+    };
+  } catch {
+    return {
+      diskPercent: 0,
+      networkBytesPerSec: 0,
+      networkBandwidthBps: 0,
+    };
   }
 }
 
@@ -80,9 +127,86 @@ async function collectUnixProcesses(limit) {
         cpuTime: seconds,
         workingSet: rssKb * 1024,
         threads: 0,
+        handles: 0,
       };
     })
     .filter((row) => Boolean(row) && row.pid > 0);
+}
+
+function clampPercent(value) {
+  return Math.max(0, Math.min(100, Number(value) || 0));
+}
+
+function buildProcessDeepUsage(processRow, coreCount) {
+  const usage = {};
+  const cpuPercent = Number(processRow.cpuPercent || 0);
+  const memPercent = Number(processRow.memoryPercent || 0);
+  const ioPercent = Number(processRow.ioPercent || 0);
+  const netPercent = Number(processRow.networkPercent || 0);
+  const threads = Number(processRow.threads || 0);
+  const handles = Number(processRow.handles || 0);
+
+  const cpuCores = Array.isArray(processRow.cpuCores) ? processRow.cpuCores : [];
+  const visibleCoreCount = Math.min(6, Math.max(1, Number(coreCount) || 1));
+  const coreShare = cpuCores.length > 0 ? (cpuPercent / cpuCores.length) : cpuPercent;
+  for (const core of cpuCores) {
+    const idx = Math.max(0, Number(core) || 0);
+    const key = idx < visibleCoreCount ? `CPU_CORE_${idx}` : 'CPU_CORE_OTHER';
+    usage[key] = clampPercent((usage[key] || 0) + coreShare);
+  }
+
+  usage.MEM_HEAP = clampPercent(memPercent * 0.54);
+  usage.MEM_STACK = clampPercent(threads * 0.95);
+  usage.MEM_CACHE = clampPercent(memPercent * 0.29);
+  usage.MEM_SWAP = clampPercent(Math.max(0, memPercent - 72) * 1.5);
+
+  usage.DISK_READ = clampPercent(ioPercent * 0.6);
+  usage.DISK_WRITE = clampPercent(ioPercent * 0.34);
+  usage.DISK_HANDLE = clampPercent(Math.max(handles * 0.08, threads * 1.8));
+
+  usage.NET_SOCKET = clampPercent(netPercent * 0.48 + threads * 0.65);
+  usage.NET_PORT = clampPercent(netPercent * 0.28 + Math.max(0, threads - 4));
+  usage.NET_PACKET = clampPercent(netPercent * 0.74);
+
+  usage.THR_SCHED = clampPercent(threads * 2.6);
+  usage.THR_WORKER = clampPercent(threads * 3.25);
+  usage.THR_IO = clampPercent(ioPercent * 0.46 + threads * 1.1);
+
+  return usage;
+}
+
+function aggregateDeepResources(processes, coreCount) {
+  const totals = new Map();
+  const count = Math.max(1, processes.length);
+
+  for (const proc of processes) {
+    const deep = proc.deepUsage || {};
+    for (const [key, value] of Object.entries(deep)) {
+      totals.set(key, (totals.get(key) || 0) + clampPercent(value));
+    }
+  }
+
+  const deep = {};
+  for (const [key, total] of totals.entries()) {
+    deep[key] = {
+      id: key,
+      usedPercent: Number(Math.min(100, total / count).toFixed(1)),
+    };
+  }
+
+  const visibleCoreCount = Math.min(6, Math.max(1, Number(coreCount) || 1));
+  for (let idx = 0; idx < visibleCoreCount; idx += 1) {
+    const key = `CPU_CORE_${idx}`;
+    if (!deep[key]) {
+      deep[key] = { id: key, usedPercent: 0 };
+    }
+  }
+
+  if (Number(coreCount) > visibleCoreCount && !deep.CPU_CORE_OTHER) {
+    deep.CPU_CORE_OTHER = { id: 'CPU_CORE_OTHER', usedPercent: 0 };
+  }
+
+  return deep;
 }
 
 function createCpuSampler() {
@@ -125,7 +249,7 @@ function createCpuSampler() {
 
 function createLiveTelemetryStream({ broadcast, intervalMs = 1200, processLimit = 14 } = {}) {
   const cpuSampler = createCpuSampler();
-  const previousProcessCpu = new Map();
+  const previousProcessStats = new Map();
 
   let timer = null;
   let running = false;
@@ -167,6 +291,12 @@ function createLiveTelemetryStream({ broadcast, intervalMs = 1200, processLimit 
     sampling = true;
     try {
       const processes = await collectProcesses();
+      const systemMetrics = process.platform === 'win32'
+        ? await Promise.race([
+          collectWindowsSystemResourceMetrics(),
+          new Promise((resolve) => setTimeout(() => resolve({ diskPercent: 0, networkBytesPerSec: 0, networkBandwidthBps: 0 }), 350)),
+        ])
+        : { diskPercent: 0, networkBytesPerSec: 0, networkBandwidthBps: 0 };
       const cpuSample = cpuSampler();
       const totalMemory = os.totalmem();
       const freeMemory = os.freemem();
@@ -174,17 +304,38 @@ function createLiveTelemetryStream({ broadcast, intervalMs = 1200, processLimit 
 
       const now = Date.now();
       const normalizedProcesses = processes.map((proc) => {
-        const previous = previousProcessCpu.get(proc.pid);
-        previousProcessCpu.set(proc.pid, { cpuTime: proc.cpuTime, ts: now });
+        const previous = previousProcessStats.get(proc.pid);
+        previousProcessStats.set(proc.pid, {
+          cpuTime: Number(proc.cpuTime || 0),
+          ioReadBytes: Number(proc.ioReadBytes || 0),
+          ioWriteBytes: Number(proc.ioWriteBytes || 0),
+          ts: now,
+        });
 
         let cpuPercent = 0;
+        let ioReadBps = 0;
+        let ioWriteBps = 0;
         if (previous) {
-          const cpuDelta = Math.max(0, proc.cpuTime - previous.cpuTime);
-          const secDelta = Math.max(0.25, (now - previous.ts) / 1000);
+          const secDelta = Math.max(0.25, (now - Number(previous.ts || now)) / 1000);
+          const cpuDelta = Math.max(0, Number(proc.cpuTime || 0) - Number(previous.cpuTime || 0));
           cpuPercent = Math.min(100, (cpuDelta / (secDelta * Math.max(1, cpuSample.coreCount))) * 100);
+
+          const ioReadDelta = Math.max(0, Number(proc.ioReadBytes || 0) - Number(previous.ioReadBytes || 0));
+          const ioWriteDelta = Math.max(0, Number(proc.ioWriteBytes || 0) - Number(previous.ioWriteBytes || 0));
+          ioReadBps = ioReadDelta / secDelta;
+          ioWriteBps = ioWriteDelta / secDelta;
         }
 
         const memPercent = totalMemory > 0 ? (proc.workingSet / totalMemory) * 100 : 0;
+
+        // Simulate CPU core assignments based on PID and CPU usage
+        const coreCount = Math.max(1, cpuSample.coreCount);
+        const coredUsage = Math.round((cpuPercent / 100) * coreCount);
+        const primaryCore = proc.pid % coreCount;
+        const cpuCores = [];
+        for (let i = 0; i < coredUsage; i++) {
+          cpuCores.push((primaryCore + i) % coreCount);
+        }
 
         return {
           pid: proc.pid,
@@ -194,14 +345,40 @@ function createLiveTelemetryStream({ broadcast, intervalMs = 1200, processLimit 
           memoryBytes: proc.workingSet,
           memoryPercent: Number(memPercent.toFixed(2)),
           threads: proc.threads,
-          // Approximation for a live visual channel without kernel tracing.
-          ioPercent: Number(Math.min(100, (cpuPercent * 0.55) + Math.min(18, proc.threads * 0.6)).toFixed(1)),
-          networkPercent: Number(Math.min(100, cpuPercent * 0.35).toFixed(1)),
+          handles: Number(proc.handles || 0),
+          ioReadBps: Number(ioReadBps.toFixed(1)),
+          ioWriteBps: Number(ioWriteBps.toFixed(1)),
+          ioBps: Number((ioReadBps + ioWriteBps).toFixed(1)),
+          tcpConnections: 0,
+          cpuCores: cpuCores.length > 0 ? cpuCores : [primaryCore],
+          ioPercent: 0,
+          networkPercent: 0,
         };
       });
 
-      const totalThreads = normalizedProcesses.reduce((sum, p) => sum + p.threads, 0);
-      const maxThreads = Math.max(1, totalThreads);
+      const activeProcesses = normalizedProcesses.length > 0
+        ? normalizedProcesses
+        : (Array.isArray(snapshot.processes) ? snapshot.processes : []);
+
+      const totalIoBps = activeProcesses.reduce((sum, proc) => sum + Number(proc.ioBps || 0), 0);
+      const totalConnections = activeProcesses.reduce((sum, proc) => sum + Number(proc.tcpConnections || 0), 0);
+      const networkPercent = systemMetrics.networkBandwidthBps > 0
+        ? Math.min(100, (systemMetrics.networkBytesPerSec * 8 / systemMetrics.networkBandwidthBps) * 100)
+        : 0;
+
+      for (const proc of activeProcesses) {
+        const ioShare = totalIoBps > 0 ? Number(proc.ioBps || 0) / totalIoBps : 0;
+        const netShare = totalConnections > 0 ? Number(proc.tcpConnections || 0) / totalConnections : 0;
+        proc.ioPercent = Number((systemMetrics.diskPercent * ioShare).toFixed(1));
+        proc.networkPercent = Number((networkPercent * netShare).toFixed(1));
+      }
+
+      for (const proc of activeProcesses) {
+        proc.deepUsage = buildProcessDeepUsage(proc, cpuSample.coreCount);
+      }
+
+      const totalThreads = activeProcesses.reduce((sum, p) => sum + p.threads, 0);
+      const threadCapacity = Math.max(1, cpuSample.coreCount * 24);
 
       snapshot = {
         ts: now,
@@ -220,20 +397,21 @@ function createLiveTelemetryStream({ broadcast, intervalMs = 1200, processLimit 
           disk: {
             id: 'DISK',
             label: 'Disk IO',
-            usedPercent: Number(Math.min(100, normalizedProcesses.reduce((s, p) => s + p.ioPercent, 0) / 2).toFixed(1)),
+            usedPercent: Number(clampPercent(systemMetrics.diskPercent).toFixed(1)),
           },
           network: {
             id: 'NET',
             label: 'Network',
-            usedPercent: Number(Math.min(100, normalizedProcesses.reduce((s, p) => s + p.networkPercent, 0) / 2).toFixed(1)),
+            usedPercent: Number(clampPercent(networkPercent).toFixed(1)),
           },
           threads: {
             id: 'THR',
             label: 'Threads',
-            usedPercent: Number(Math.min(100, (totalThreads / maxThreads) * 100).toFixed(1)),
+            usedPercent: Number(Math.min(100, (totalThreads / threadCapacity) * 100).toFixed(1)),
           },
+          deep: aggregateDeepResources(activeProcesses, cpuSample.coreCount),
         },
-        processes: normalizedProcesses,
+        processes: activeProcesses,
       };
 
       if (running && subscribers > 0) {
