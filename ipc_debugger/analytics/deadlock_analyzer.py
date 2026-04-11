@@ -29,6 +29,7 @@ class DeadlockAnalyzer:
         self._lock = threading.Lock()
         self._last_result: Dict = {}
         self._history: List[Dict] = []
+        self._log_file = log_file
 
     def update(self, processes: list,
                channels: list, logger=None) -> None:
@@ -82,6 +83,8 @@ class DeadlockAnalyzer:
         with self._lock:
             self._last_result = result
             self._history.append(result)
+        if result["has_deadlock"]:
+            self._write_log(result)
 
         return result
 
@@ -161,3 +164,21 @@ class DeadlockAnalyzer:
             if node not in visited:
                 dfs(node)
         return cycles
+    
+    def _write_log(self, result: Dict) -> None:
+        """Write deadlock detection to log file."""
+        try:
+            with open(self._log_file, "a") as f:
+                f.write("=" * 50 + "\n")
+                f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+                       f"{result['severity']}\n")
+                f.write(f"Deadlock detected!\n")
+                f.write(f"Cycles:\n")
+                for cycle in result["cycles_readable"]:
+                    f.write(f"  → {cycle}\n")
+                f.write(f"Processes involved: "
+                       f"{result['processes_involved']}\n")
+                f.write(f"Graph size: {result['graph_size']}\n")
+                f.write("=" * 50 + "\n\n")
+        except Exception:
+            pass
