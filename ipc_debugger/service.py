@@ -20,9 +20,9 @@ from ipc_debugger.utils.constants import EventType, Scenario, ProcessState
 from ipc_debugger.core.process import SimProcess
 from ipc_debugger.simulation.event_manager import EventManager
 from ipc_debugger.simulation.scheduler import Scheduler
-from ipc_debugger.debugger.logger import IPCLogger, LogEvent
-from ipc_debugger.debugger.deadlock_detector import DeadlockDetector
-from ipc_debugger.debugger.race_condition import RaceConditionDetector, RaceWarning
+from ipc_debugger.analysis_tools.logger import IPCLogger, LogEvent
+from ipc_debugger.analysis_tools.deadlock_detector import DeadlockDetector
+from ipc_debugger.analysis_tools.race_condition import RaceConditionDetector, RaceWarning
 from ipc_debugger.analytics.latency import LatencyTracker
 from ipc_debugger.analytics.throughput import ThroughputTracker
 from ipc_debugger.analytics.system_perf_tracker import SystemPerfTracker

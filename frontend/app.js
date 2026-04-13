@@ -33,6 +33,7 @@ const state = {
   },
   graphSnapshot: null,
   graphFramePending: false,
+  modeTransitionTimer: null,
   history: {
     threads: [],
     memory: [],
@@ -138,6 +139,15 @@ function setSparkline(id, values, width = 100, height = 20) {
   } else if (node.tagName.toLowerCase() === 'path') {
     node.setAttribute('d', `M${points.replace(/ /g, ' L')}`);
   }
+}
+
+function formatLiveAge(ts) {
+  const sampleTs = Number(ts || 0);
+  if (!Number.isFinite(sampleTs) || sampleTs <= 0) {
+    return 'Live: waiting';
+  }
+  const seconds = Math.max(0, Math.round((Date.now() - sampleTs) / 1000));
+  return seconds <= 1 ? 'Live: now' : `Live: ${seconds}s ago`;
 }
 
 const RESOURCE_COLORS = {
@@ -283,9 +293,7 @@ function buildLiveGraph(liveProcesses, graphWidth, graphHeight) {
       resourceGroup: resource.id,
       label: resource.label,
       usage: resource.usage,
-      subtitle: resource.id === 'CPU'
-        ? `CPU ${formatPercent(resource.usage, 1)} live`
-        : `${formatPercent(resource.usage, 1)} live`,
+      subtitle: `${formatPercent(resource.usage, 1)} live`,
       color,
     });
 
@@ -304,6 +312,7 @@ function buildLiveGraph(liveProcesses, graphWidth, graphHeight) {
         parentId: resource.id,
         resourceGroup: resource.id,
         label: child.label,
+        usage: deepPercent,
         subtitle: `${child.subtitle} · ${formatPercent(deepPercent, 1)}`,
         color,
       });
@@ -436,6 +445,7 @@ function buildLiveGraph(liveProcesses, graphWidth, graphHeight) {
       ? Number(liveDeep[depthNodeId].usedPercent || 0)
       : Math.min(100, totalValue / processCount);
     const baseSubtitle = String(node.subtitle || '').split('·')[0].trim();
+    node.usage = avgUsage;
     node.subtitle = `${baseSubtitle} · ${formatPercent(avgUsage, 1)}`;
   }
 
@@ -448,6 +458,92 @@ function chunk(items, size) {
     rows.push(items.slice(idx, idx + size));
   }
   return rows;
+}
+
+function ellipsePerimeter(radiusX, radiusY) {
+  const a = Math.max(1, Number(radiusX) || 1);
+  const b = Math.max(1, Number(radiusY) || 1);
+  // Ramanujan approximation for ellipse circumference.
+  return 2 * Math.PI * Math.sqrt(((a * a) + (b * b)) / 2);
+}
+
+function resolveProcessRingLayout({
+  processCount,
+  maxOuterRadius,
+  minBaseRadius,
+  preferredGap,
+  minGap,
+  nodeSpacing,
+  yScale,
+}) {
+  const targetCount = Math.max(0, Number(processCount) || 0);
+  if (targetCount === 0) {
+    return {
+      ringCapacities: [],
+      ringCount: 0,
+      ringGap: 0,
+      baseRadius: Math.max(0, Number(minBaseRadius) || 0),
+    };
+  }
+
+  const outer = Math.max(160, Number(maxOuterRadius) || 160);
+  const minBase = Math.max(100, Math.min(outer, Number(minBaseRadius) || 100));
+  const prefGap = Math.max(0, Number(preferredGap) || 0);
+  const hardMinGap = Math.max(0, Number(minGap) || 0);
+  const spacing = Math.max(110, Number(nodeSpacing) || 110);
+  const scaleY = Math.max(0.5, Number(yScale) || 0.95);
+  const maxRings = 14;
+  let best = null;
+
+  for (let ringCount = 1; ringCount <= maxRings; ringCount += 1) {
+    const maxGapBySpan = ringCount === 1 ? 0 : ((outer - minBase) / (ringCount - 1));
+    if (ringCount > 1 && maxGapBySpan < hardMinGap) {
+      continue;
+    }
+
+    const ringGap = ringCount === 1 ? 0 : Math.min(prefGap, maxGapBySpan);
+    const baseRadius = ringCount === 1 ? outer : (outer - ringGap * (ringCount - 1));
+    if (baseRadius < minBase - 0.001) {
+      continue;
+    }
+
+    const ringCapacities = [];
+    let totalCapacity = 0;
+    for (let ring = 0; ring < ringCount; ring += 1) {
+      const radius = baseRadius + (ring * ringGap);
+      const perimeter = ellipsePerimeter(radius, radius * scaleY);
+      const capacity = Math.max(6, Math.floor(perimeter / spacing));
+      ringCapacities.push(capacity);
+      totalCapacity += capacity;
+    }
+
+    const candidate = {
+      ringCapacities,
+      ringCount,
+      ringGap,
+      baseRadius,
+      totalCapacity,
+    };
+
+    if (!best || totalCapacity > best.totalCapacity) {
+      best = candidate;
+    }
+    if (totalCapacity >= targetCount) {
+      return candidate;
+    }
+  }
+
+  if (best) {
+    return best;
+  }
+
+  const fallbackPerimeter = ellipsePerimeter(outer, outer * scaleY);
+  return {
+    ringCapacities: [Math.max(targetCount, Math.floor(fallbackPerimeter / spacing), 6)],
+    ringCount: 1,
+    ringGap: 0,
+    baseRadius: outer,
+  };
 }
 
 function layoutGraphNodes(nodes, graphWidth, graphHeight) {
@@ -504,30 +600,38 @@ function layoutGraphNodes(nodes, graphWidth, graphHeight) {
 
   const processRingBaseCapacity = 18;
   const processRingCapacityStep = 2;
-  const ringCapacities = [];
+  const provisionalRingCapacities = [];
   let remainingForRings = Math.max(1, processes.length);
   while (remainingForRings > 0) {
-    const cap = processRingBaseCapacity + (ringCapacities.length * processRingCapacityStep);
-    ringCapacities.push(cap);
+    const cap = processRingBaseCapacity + (provisionalRingCapacities.length * processRingCapacityStep);
+    provisionalRingCapacities.push(cap);
     remainingForRings -= cap;
   }
-  const ringCount = Math.max(1, ringCapacities.length);
+  const provisionalRingCount = Math.max(1, provisionalRingCapacities.length);
   const safeMarginX = Math.max(52, Math.round(cardSizes.process.w / 2) + 22);
   const safeMarginY = Math.max(52, Math.round(cardSizes.process.h / 2) + 24);
   const maxRadiusX = Math.max(220, (graphWidth / 2) - safeMarginX);
   const maxRadiusY = Math.max(220, ((graphHeight / 2) - safeMarginY) / GRAPH_LAYOUT.processYScale);
-  const maxOuterRadius = Math.max(220, Math.min(maxRadiusX, maxRadiusY));
+  const viewportOuterRadius = Math.max(220, Math.min(maxRadiusX, maxRadiusY));
+
+  // Expand process radius when density is high; viewBox fitting handles larger coordinates.
+  const processCardDiag = Math.hypot(cardSizes.process.w, cardSizes.process.h);
+  const processNodeSpacing = processCardDiag + 28;
+  const ellipseUnitPerimeter = ellipsePerimeter(1, GRAPH_LAYOUT.processYScale);
+  const processOuterDemand = processes.length > 0
+    ? ((processes.length * processNodeSpacing) / Math.max(1, ellipseUnitPerimeter)) + 34
+    : 0;
+  const maxOuterRadius = Math.max(viewportOuterRadius, processOuterDemand);
 
   const preferredGap = Math.max(GRAPH_LAYOUT.processRingGap, Math.round(cardSizes.process.h * 1.9));
-  const ringGap = ringCount <= 1
+  const ringGap = provisionalRingCount <= 1
     ? 0
-    : Math.min(preferredGap, Math.max(104, (maxOuterRadius - 360) / (ringCount - 1)));
-  const baseProcessRadius = ringCount <= 1
+    : Math.min(preferredGap, Math.max(104, (maxOuterRadius - 360) / (provisionalRingCount - 1)));
+  const baseProcessRadius = provisionalRingCount <= 1
     ? maxOuterRadius
-    : maxOuterRadius - (ringGap * (ringCount - 1));
+    : maxOuterRadius - (ringGap * (provisionalRingCount - 1));
 
   const centerRadius = Math.max(120, Math.min(GRAPH_LAYOUT.centerRadius, baseProcessRadius * 0.52));
-  const processCardDiag = Math.hypot(cardSizes.process.w, cardSizes.process.h);
   const rootCardDiag = Math.hypot(cardSizes.resourceRoot.w, cardSizes.resourceRoot.h);
   const depthCardDiag = Math.hypot(cardSizes.resourceDepth.w, cardSizes.resourceDepth.h);
   const radialGuard = 28;
@@ -586,66 +690,28 @@ function layoutGraphNodes(nodes, graphWidth, graphHeight) {
     });
   });
 
-  // Place deep resources in angular sectors around their parent root to reduce center overlap.
-  const depthGroups = new Map();
-  for (const node of depthResources) {
-    const key = String(node.parentId || 'OTHER');
-    if (!depthGroups.has(key)) {
-      depthGroups.set(key, []);
+  // Distribute all depth resources uniformly around depth rings to guarantee spacing.
+  const orderedDepth = [...depthResources].sort((a, b) => {
+    const aParent = RESOURCE_ORDER.indexOf(String(a.parentId || ''));
+    const bParent = RESOURCE_ORDER.indexOf(String(b.parentId || ''));
+    if (aParent !== bParent) {
+      return (aParent === -1 ? 99 : aParent) - (bParent === -1 ? 99 : bParent);
     }
-    depthGroups.get(key).push(node);
-  }
+    return String(a.id).localeCompare(String(b.id));
+  });
 
-  const groupedKeys = [
-    ...RESOURCE_ORDER.filter((key) => depthGroups.has(key)),
-    ...[...depthGroups.keys()].filter((key) => !RESOURCE_ORDER.includes(key)),
-  ];
+  let depthCursor = 0;
+  for (let ring = 0; ring < depthRadii.length && depthCursor < orderedDepth.length; ring += 1) {
+    const radius = depthRadii[ring];
+    const ringCap = Math.max(8, Math.floor((Math.PI * 2 * radius) / depthMinGap));
+    const remaining = orderedDepth.length - depthCursor;
+    const count = Math.min(ringCap, remaining);
+    const step = (Math.PI * 2) / Math.max(1, count);
+    const phase = -Math.PI / 2 + (ring * 0.18);
 
-  const sectorWidth = Math.min(1.08, (Math.PI * 2) / Math.max(5, groupedKeys.length + 1));
-  for (const key of groupedKeys) {
-    const group = depthGroups.get(key) || [];
-    if (!group.length) {
-      continue;
-    }
-
-    const groupIndex = Math.max(0, RESOURCE_ORDER.indexOf(key));
-    const fallbackAngle = -Math.PI / 2 + (groupIndex * rootStep);
-    const baseAngle = rootAngles.get(key) ?? fallbackAngle;
-    let consumed = 0;
-
-    for (let ring = 0; ring < depthRadii.length && consumed < group.length; ring += 1) {
-      const radius = depthRadii[ring];
-      const sectorArc = Math.max(depthMinGap, radius * sectorWidth);
-      const ringCap = Math.max(1, Math.floor(sectorArc / depthMinGap));
-      const remaining = group.length - consumed;
-      const count = Math.min(ringCap, remaining);
-
-      for (let i = 0; i < count; i += 1) {
-        const resource = group[consumed + i];
-        const t = count === 1 ? 0 : (i / (count - 1)) - 0.5;
-        const angle = baseAngle + (t * sectorWidth * 0.9) + (ring * 0.05);
-
-        positions.set(resource.id, {
-          x: centerX + Math.cos(angle) * radius,
-          y: centerY + Math.sin(angle) * radius,
-        });
-
-        resourceMeta.set(resource.id, {
-          ringType: 'depth',
-          ringRadius: radius,
-          defaultAngle: angle,
-          card: cardSizes.resourceDepth,
-        });
-      }
-
-      consumed += count;
-    }
-
-    while (consumed < group.length) {
-      const resource = group[consumed];
-      const radius = depthRadii.length ? depthRadii[depthRadii.length - 1] : depthStartRadius;
-      const laneOffset = ((consumed % 5) - 2) * (sectorWidth / 5);
-      const angle = baseAngle + laneOffset;
+    for (let i = 0; i < count; i += 1) {
+      const resource = orderedDepth[depthCursor + i];
+      const angle = phase + (i * step);
 
       positions.set(resource.id, {
         x: centerX + Math.cos(angle) * radius,
@@ -658,9 +724,29 @@ function layoutGraphNodes(nodes, graphWidth, graphHeight) {
         defaultAngle: angle,
         card: cardSizes.resourceDepth,
       });
-
-      consumed += 1;
     }
+
+    depthCursor += count;
+  }
+
+  while (depthCursor < orderedDepth.length) {
+    const resource = orderedDepth[depthCursor];
+    const radius = depthRadii.length ? depthRadii[depthRadii.length - 1] : depthStartRadius;
+    const angle = -Math.PI / 2 + ((depthCursor % 12) * ((Math.PI * 2) / 12));
+
+    positions.set(resource.id, {
+      x: centerX + Math.cos(angle) * radius,
+      y: centerY + Math.sin(angle) * radius,
+    });
+
+    resourceMeta.set(resource.id, {
+      ringType: 'depth',
+      ringRadius: radius,
+      defaultAngle: angle,
+      card: cardSizes.resourceDepth,
+    });
+
+    depthCursor += 1;
   }
 
   // Enforce pixel-based non-overlap for all resource boxes before rendering.
@@ -748,6 +834,30 @@ function layoutGraphNodes(nodes, graphWidth, graphHeight) {
     return sa - sb;
   });
 
+  const depthOuterRadius = depthRadii.length > 0 ? depthRadii[depthRadii.length - 1] : centerRadius;
+  const minProcessBaseRadius = Math.max(
+    baseProcessRadius,
+    depthOuterRadius + (depthCardDiag / 2) + (processCardDiag / 2) + 58,
+    centerRadius + (rootCardDiag / 2) + (processCardDiag / 2) + 90,
+  );
+  const minProcessRingGap = Math.max(112, cardSizes.process.h + 36);
+  const preferredProcessRingGap = Math.max(GRAPH_LAYOUT.processRingGap, Math.round(cardSizes.process.h * 2.2));
+
+  const processRingLayout = resolveProcessRingLayout({
+    processCount: sortedProcesses.length,
+    maxOuterRadius,
+    minBaseRadius: minProcessBaseRadius,
+    preferredGap: preferredProcessRingGap,
+    minGap: minProcessRingGap,
+    nodeSpacing: processNodeSpacing,
+    yScale: GRAPH_LAYOUT.processYScale,
+  });
+
+  const resolvedRingCapacities = processRingLayout.ringCapacities;
+  const resolvedRingCount = processRingLayout.ringCount;
+  const resolvedRingGap = processRingLayout.ringGap;
+  const resolvedBaseProcessRadius = processRingLayout.baseRadius;
+
   const gcd = (a, b) => {
     let x = Math.abs(a);
     let y = Math.abs(b);
@@ -763,12 +873,12 @@ function layoutGraphNodes(nodes, graphWidth, graphHeight) {
     const process = sortedProcesses[rank];
     let ring = 0;
     let slotInRing = rank;
-    while (ring < ringCapacities.length && slotInRing >= ringCapacities[ring]) {
-      slotInRing -= ringCapacities[ring];
+    while (ring < resolvedRingCapacities.length && slotInRing >= resolvedRingCapacities[ring]) {
+      slotInRing -= resolvedRingCapacities[ring];
       ring += 1;
     }
-    const safeRing = Math.min(ring, ringCapacities.length - 1);
-    const ringCapacity = ringCapacities[safeRing] || processRingBaseCapacity;
+    const safeRing = Math.min(ring, Math.max(0, resolvedRingCapacities.length - 1));
+    const ringCapacity = resolvedRingCapacities[safeRing] || processRingBaseCapacity;
 
     let jump = Math.max(1, Math.floor(ringCapacity / 2) - 1);
     while (jump > 1 && gcd(jump, ringCapacity) !== 1) {
@@ -776,7 +886,7 @@ function layoutGraphNodes(nodes, graphWidth, graphHeight) {
     }
     const distributedSlot = (slotInRing * jump) % ringCapacity;
     const angle = (-Math.PI / 2) + ((Math.PI * 2 * distributedSlot) / ringCapacity);
-    const radius = baseProcessRadius + (safeRing * ringGap);
+    const radius = resolvedBaseProcessRadius + (safeRing * resolvedRingGap);
 
     positions.set(process.id, {
       x: centerX + Math.cos(angle) * radius,
@@ -795,9 +905,9 @@ function layoutGraphNodes(nodes, graphWidth, graphHeight) {
       centerRadius,
       childRingRadius,
       depthRadii,
-      processBaseRadius: baseProcessRadius,
-      processRingGap: ringGap,
-      processRingCount: ringCount,
+      processBaseRadius: resolvedBaseProcessRadius,
+      processRingGap: resolvedRingGap,
+      processRingCount: resolvedRingCount,
     },
     rootAngles,
   };
@@ -853,9 +963,28 @@ function renderNodeSvg(canvas, node, position, cards, nodeFocus = null) {
 
   // Only show subtitle for resources
   if (!isProcess) {
+    const usageValue = Math.max(0, Math.min(100, Number(node.usage || 0)));
+    const usageBarBg = createSvgEl('rect');
+    usageBarBg.setAttribute('x', `${-card.w / 2 + 10}`);
+    usageBarBg.setAttribute('y', `${-card.h / 2 + 29}`);
+    usageBarBg.setAttribute('rx', '2');
+    usageBarBg.setAttribute('width', `${card.w - 20}`);
+    usageBarBg.setAttribute('height', '3.4');
+    usageBarBg.setAttribute('fill', '#1f2937');
+    group.appendChild(usageBarBg);
+
+    const usageBar = createSvgEl('rect');
+    usageBar.setAttribute('x', `${-card.w / 2 + 10}`);
+    usageBar.setAttribute('y', `${-card.h / 2 + 29}`);
+    usageBar.setAttribute('rx', '2');
+    usageBar.setAttribute('width', `${((card.w - 20) * usageValue) / 100}`);
+    usageBar.setAttribute('height', '3.4');
+    usageBar.setAttribute('fill', '#3b82f6');
+    group.appendChild(usageBar);
+
     const subText = createSvgEl('text');
     subText.setAttribute('x', `${-card.w / 2 + 10}`);
-    subText.setAttribute('y', `${-card.h / 2 + 37}`);
+    subText.setAttribute('y', `${-card.h / 2 + 40}`);
     subText.setAttribute('fill', '#98a3b8');
     subText.setAttribute('font-size', '9');
     subText.setAttribute('letter-spacing', '0.16');
@@ -1173,9 +1302,21 @@ function renderGraphGuides(canvas, graphWidth, graphHeight, processCount, layout
   canvas.appendChild(guideLayer);
 }
 
+function setHoverProcess(nextProcessId) {
+  const normalized = nextProcessId || null;
+  if (state.graphInteraction.hoverProcessId === normalized) {
+    return;
+  }
+  state.graphInteraction.hoverProcessId = normalized;
+  scheduleGraphFrame(true);
+}
+
 function renderGraphScene(canvas, sourceGraph, graphWidth, graphHeight) {
   const { positions, cards, layoutMetrics } = layoutGraphNodes(sourceGraph.nodes || [], graphWidth, graphHeight);
   const nodeIndex = new Map((sourceGraph.nodes || []).map((node) => [node.id, node]));
+  if (state.graphInteraction.hoverProcessId && !nodeIndex.has(state.graphInteraction.hoverProcessId)) {
+    state.graphInteraction.hoverProcessId = null;
+  }
   const focusedNodeIds = new Set();
   const highlightedResourceIds = new Set();
   const { hoverProcessId, hoverResourceId, selectedProcessId, selectedResourceId } = state.graphInteraction;
@@ -1348,10 +1489,7 @@ function renderGraphScene(canvas, sourceGraph, graphWidth, graphHeight) {
 
     groupEl.addEventListener('mouseenter', () => {
       if (nodeType === 'process') {
-        if (state.graphInteraction.hoverProcessId !== nodeId) {
-          state.graphInteraction.hoverProcessId = nodeId;
-          scheduleGraphFrame(true);
-        }
+        setHoverProcess(nodeId);
       } else {
         // Resource hover highlight is intentionally disabled.
       }
@@ -1360,8 +1498,7 @@ function renderGraphScene(canvas, sourceGraph, graphWidth, graphHeight) {
     groupEl.addEventListener('mouseleave', () => {
       if (nodeType === 'process') {
         if (state.graphInteraction.hoverProcessId === nodeId) {
-          state.graphInteraction.hoverProcessId = null;
-          scheduleGraphFrame(true);
+          setHoverProcess(null);
         }
       } else {
         // Resource hover highlight is intentionally disabled.
@@ -1441,6 +1578,7 @@ function clampScale(nextScale) {
 
 function initGraphInteraction() {
   const viewport = el('sceneViewport');
+  const graphCanvas = el('ipcGraphCanvas');
   if (!viewport) {
     return;
   }
@@ -1458,9 +1596,11 @@ function initGraphInteraction() {
     if (target instanceof Element && target.closest('button, input, select, textarea, a, #taskManagerPanel')) {
       return;
     }
+    event.preventDefault();
     state.graphView.isPanning = true;
     state.graphView.startX = event.clientX - state.graphView.x;
     state.graphView.startY = event.clientY - state.graphView.y;
+    document.body.classList.add('is-panning');
     viewport.classList.remove('cursor-grab');
     viewport.classList.add('cursor-grabbing');
   });
@@ -1472,6 +1612,7 @@ function initGraphInteraction() {
     if (!state.graphView.isPanning) {
       return;
     }
+    event.preventDefault();
     state.graphView.x = event.clientX - state.graphView.startX;
     state.graphView.y = event.clientY - state.graphView.startY;
     applyGraphViewportTransform();
@@ -1479,6 +1620,26 @@ function initGraphInteraction() {
       renderGraph();
     }
   });
+
+  if (graphCanvas) {
+    graphCanvas.addEventListener('mousemove', (event) => {
+      if (state.graphView.isPanning) {
+        return;
+      }
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+
+      const processNode = target.closest('g[data-node-type="process"]');
+      const processId = processNode?.getAttribute('data-node-id') || null;
+      setHoverProcess(processId);
+    });
+
+    graphCanvas.addEventListener('mouseleave', () => {
+      setHoverProcess(null);
+    });
+  }
 
   window.addEventListener('mouseup', () => {
     if (!allowPan) {
@@ -1488,6 +1649,18 @@ function initGraphInteraction() {
       return;
     }
     state.graphView.isPanning = false;
+    document.body.classList.remove('is-panning');
+    viewport.classList.remove('cursor-grabbing');
+    viewport.classList.add('cursor-grab');
+    setHoverProcess(null);
+  });
+
+  window.addEventListener('blur', () => {
+    if (!state.graphView.isPanning) {
+      return;
+    }
+    state.graphView.isPanning = false;
+    document.body.classList.remove('is-panning');
     viewport.classList.remove('cursor-grabbing');
     viewport.classList.add('cursor-grab');
   });
@@ -1606,6 +1779,7 @@ function renderMetrics() {
   pushHistory('latency', latency);
 
   setText('threadCountValue', `${totalThreads.toLocaleString()} active`);
+  setText('managerStatus', state.liveEnabled ? formatLiveAge(state.live?.ts) : 'Simulation');
   setSparkline('threadSparkline', state.history.threads);
 
   setText('memoryFragmentationValue', formatPercent(memPercent * 0.8, 1));
@@ -1675,20 +1849,17 @@ function renderButtons() {
   const liveText = liveButton?.querySelector('span:last-child');
   const manualControls = el('manualControlsGroup');
   const controlBar = el('controlBar');
+  const liveIntentEnabled = state.liveEnabled;
   if (liveButton && liveText) {
-    const connected = state.socket?.readyState === WebSocket.OPEN;
-    const active = state.liveEnabled && connected;
-    liveText.textContent = active ? 'Live Mode: On' : 'Live Mode: Off';
-    liveButton.className = active
+    liveText.textContent = liveIntentEnabled ? 'Live Mode: On' : 'Live Mode: Off';
+    liveButton.className = liveIntentEnabled
       ? 'dock-btn dock-btn-live is-on'
       : 'dock-btn dock-btn-live is-off';
   }
 
   if (manualControls && controlBar) {
-    manualControls.style.maxWidth = '100%';
-    manualControls.style.opacity = '1';
-    manualControls.style.transform = 'none';
-    controlBar.style.width = '';
+    manualControls.classList.toggle('is-collapsed', liveIntentEnabled);
+    controlBar.classList.toggle('manual-hidden', liveIntentEnabled);
   }
 
   const minimizeButton = el('minimizeGraphButton');
@@ -1702,6 +1873,51 @@ function renderButtons() {
       text.textContent = state.taskManagerOpen ? 'Close' : 'Tasks';
     }
   }
+}
+
+function triggerModeTransition() {
+  const controlBar = el('controlBar');
+  const graphContainer = el('graphContainer');
+
+  if (controlBar) {
+    controlBar.classList.remove('mode-switching');
+    void controlBar.offsetWidth;
+    controlBar.classList.add('mode-switching');
+  }
+
+  if (graphContainer) {
+    graphContainer.classList.remove('mode-switching');
+    void graphContainer.offsetWidth;
+    graphContainer.classList.add('mode-switching');
+  }
+
+  if (state.modeTransitionTimer) {
+    clearTimeout(state.modeTransitionTimer);
+  }
+  state.modeTransitionTimer = setTimeout(() => {
+    controlBar?.classList.remove('mode-switching');
+    graphContainer?.classList.remove('mode-switching');
+    state.modeTransitionTimer = null;
+  }, 380);
+}
+
+function setLiveMode(enabled, animate = true) {
+  const next = Boolean(enabled);
+  if (state.liveEnabled === next) {
+    return false;
+  }
+
+  state.liveEnabled = next;
+
+  if (state.socket && state.socket.readyState === WebSocket.OPEN) {
+    state.socket.send(JSON.stringify({ type: 'live:mode', enabled: state.liveEnabled }));
+  }
+
+  if (animate) {
+    triggerModeTransition();
+  }
+
+  return true;
 }
 
 function ensureGraphFilterControls() {
@@ -1729,6 +1945,7 @@ function renderTaskManager() {
   const panel = el('taskManagerPanel');
   const list = el('taskManagerList');
   const backdrop = el('taskManagerPanel');
+  const slidePanel = el('taskManagerSheet');
   
   if (!panel || !list) {
     return;
@@ -1737,16 +1954,16 @@ function renderTaskManager() {
   if (state.taskManagerOpen) {
     backdrop.style.opacity = '1';
     backdrop.style.pointerEvents = 'auto';
-    const slidePanel = panel.querySelector('[class*="translate-x"]');
     if (slidePanel) {
       slidePanel.style.transform = 'translateX(0)';
+      slidePanel.style.opacity = '1';
     }
   } else {
     backdrop.style.opacity = '0';
     backdrop.style.pointerEvents = 'none';
-    const slidePanel = panel.querySelector('[class*="translate-x"]');
     if (slidePanel) {
       slidePanel.style.transform = 'translateX(100%)';
+      slidePanel.style.opacity = '0.92';
     }
   }
 
@@ -1921,21 +2138,21 @@ function connectSocket() {
 }
 
 async function addProcess() {
-  state.liveEnabled = false;
+  setLiveMode(false);
   const payload = { priority: 1 + Math.floor(Math.random() * 5) };
   await fetchJson('/api/process', { method: 'POST', body: JSON.stringify(payload) });
   await refreshState();
 }
 
 async function addResource() {
-  state.liveEnabled = false;
+  setLiveMode(false);
   const payload = { totalInstances: 1 + Math.floor(Math.random() * 3) };
   await fetchJson('/api/resource', { method: 'POST', body: JSON.stringify(payload) });
   await refreshState();
 }
 
 async function toggleSimulation() {
-  state.liveEnabled = false;
+  setLiveMode(false);
   const running = Boolean(state.sim?.simulation?.running);
   if (running) {
     await fetchJson('/api/pause', { method: 'POST', body: '{}' });
@@ -1949,10 +2166,7 @@ async function toggleSimulation() {
 }
 
 function toggleLiveMode() {
-  state.liveEnabled = !state.liveEnabled;
-  if (state.socket && state.socket.readyState === WebSocket.OPEN) {
-    state.socket.send(JSON.stringify({ type: 'live:mode', enabled: state.liveEnabled }));
-  }
+  setLiveMode(!state.liveEnabled);
   render();
 }
 

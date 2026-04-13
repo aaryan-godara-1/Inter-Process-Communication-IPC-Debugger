@@ -2,13 +2,17 @@
 
 This package contains the backend implementation of the IPC Debugger project. The frontend has been removed, so the repository now focuses on simulation, logging, analysis, and reporting.
 
+Target platform: Windows only.
+
+Real IPC capture defaults to Windows ETW when using `IPCDebugger`.
+
 ## Architecture
 
 The backend is organized into the following modules:
 
 * `core/` - thread-safe IPC primitives and simulated processes
 * `simulation/` - scheduler and event bus
-* `debugger/` - event logger, deadlock detector, race-condition detector
+* `analysis_tools/` - event logger, deadlock detector, race-condition detector
 * `analytics/` - latency, throughput, and system-performance tracking
 * `system_monitor/` - optional psutil-backed live monitoring layer
 * `utils/` - shared enums, constants, and helpers
@@ -30,6 +34,19 @@ python -m ipc_debugger.web_server --port 8010
 ```
 
 Open the UI at `http://127.0.0.1:8010`.
+
+Run ETW-backed debugger HTTP API:
+
+```bash
+python -m ipc_debugger.http_server --port 8010
+```
+
+If you need simulation fallback, construct the debugger as:
+
+```python
+from ipc_debugger.debugger import IPCDebugger
+debugger = IPCDebugger(use_real_collector=False)
+```
 
 The backend prints a structured summary with process states, throughput, latency, bottlenecks, and deadlock cycles.
 

@@ -62,6 +62,9 @@ def _format_report(report) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if not sys.platform.startswith("win"):
+        raise OSError("ipc_debugger.main is Windows-only")
+
     parser = argparse.ArgumentParser(description="Run the IPC Debugger backend.")
     parser.add_argument(
         "--scenario",

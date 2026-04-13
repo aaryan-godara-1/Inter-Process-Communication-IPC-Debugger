@@ -362,13 +362,20 @@ function createLiveTelemetryStream({ broadcast, intervalMs = 1200, processLimit 
 
       const totalIoBps = activeProcesses.reduce((sum, proc) => sum + Number(proc.ioBps || 0), 0);
       const totalConnections = activeProcesses.reduce((sum, proc) => sum + Number(proc.tcpConnections || 0), 0);
+      const totalNetworkWeight = activeProcesses.reduce(
+        (sum, proc) => sum + Math.max(0, Number(proc.ioBps || 0)) + (Math.max(0, Number(proc.threads || 0)) * 1024),
+        0,
+      );
       const networkPercent = systemMetrics.networkBandwidthBps > 0
         ? Math.min(100, (systemMetrics.networkBytesPerSec * 8 / systemMetrics.networkBandwidthBps) * 100)
         : 0;
 
       for (const proc of activeProcesses) {
         const ioShare = totalIoBps > 0 ? Number(proc.ioBps || 0) / totalIoBps : 0;
-        const netShare = totalConnections > 0 ? Number(proc.tcpConnections || 0) / totalConnections : 0;
+        const connectionShare = totalConnections > 0 ? Number(proc.tcpConnections || 0) / totalConnections : 0;
+        const fallbackNetWeight = Math.max(0, Number(proc.ioBps || 0)) + (Math.max(0, Number(proc.threads || 0)) * 1024);
+        const fallbackShare = totalNetworkWeight > 0 ? fallbackNetWeight / totalNetworkWeight : 0;
+        const netShare = totalConnections > 0 ? connectionShare : fallbackShare;
         proc.ioPercent = Number((systemMetrics.diskPercent * ioShare).toFixed(1));
         proc.networkPercent = Number((networkPercent * netShare).toFixed(1));
       }

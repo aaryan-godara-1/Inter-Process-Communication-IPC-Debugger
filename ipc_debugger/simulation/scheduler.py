@@ -25,7 +25,7 @@ from ipc_debugger.core.pipes import Pipe, NamedPipe
 from ipc_debugger.core.message_queue import MessageQueue
 from ipc_debugger.core.shared_memory import SharedMemory
 from ipc_debugger.simulation.event_manager import EventManager
-from ipc_debugger.debugger.logger import IPCLogger
+from ipc_debugger.analysis_tools.logger import IPCLogger
 
 
 class Scheduler:

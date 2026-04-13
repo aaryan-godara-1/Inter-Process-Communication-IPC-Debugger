@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import argparse
+import sys
 import threading
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -169,6 +170,9 @@ class IPCWebHandler(BaseHTTPRequestHandler):
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8000) -> None:
+    if not sys.platform.startswith("win"):
+        raise OSError("ipc_debugger.web_server is Windows-only")
+
     repo_root = Path(__file__).resolve().parent.parent
     frontend_dir = repo_root / "frontend"
 
