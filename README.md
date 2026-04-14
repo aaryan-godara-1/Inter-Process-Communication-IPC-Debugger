@@ -42,3 +42,7 @@ http://127.0.0.1:8010
 ```bash
 python -m pytest ipc_debugger/tests -q
 ```
+
+## Branch Workflow Note
+
+For incremental work on branch `sahaj`, prefer small commits and push each commit after validation so deployment and review stay traceable.
