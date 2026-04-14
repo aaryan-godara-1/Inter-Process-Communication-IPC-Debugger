@@ -2,6 +2,12 @@
 
 ## TL;DR - Start Using It Now
 
+### 0. Sync Branch
+```bash
+git checkout sahaj
+git pull origin sahaj
+```
+
 ### 1. Start Python Backend
 ```bash
 python -m ipc_debugger.http_server --port 8010 &
