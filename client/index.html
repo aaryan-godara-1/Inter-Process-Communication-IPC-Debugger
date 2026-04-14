@@ -93,13 +93,29 @@
             font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
         }
         .grid-bg {
-            background-image: linear-gradient(#e5e5e5 1px, transparent 1px), linear-gradient(90deg, #e5e5e5 1px, transparent 1px);
-            background-size: 40px 40px;
+            background-image: linear-gradient(rgba(102, 112, 133, 0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(102, 112, 133, 0.08) 1px, transparent 1px);
+            background-size: 44px 44px;
+        }
+        body {
+            background: radial-gradient(circle at top left, rgba(21, 106, 255, 0.08), transparent 30%), #f5f7fb;
         }
         .scene-viewport {
             transform-origin: 50% 50%;
             transition: none;
             will-change: auto;
+        }
+        .glass-panel {
+            border: 1px solid rgba(116, 132, 162, 0.2);
+            background: rgba(255, 255, 255, 0.72);
+            backdrop-filter: blur(9px);
+            box-shadow: 0 10px 26px rgba(16, 24, 40, 0.08);
+            border-radius: 16px;
+        }
+        .metric-panel {
+            border: 1px solid rgba(116, 132, 162, 0.2);
+            background: rgba(250, 252, 255, 0.8);
+            backdrop-filter: blur(7px);
+            border-radius: 14px;
         }
         .surface-enter {
             animation: surface-enter 260ms cubic-bezier(0.2, 0, 0, 1);
@@ -135,15 +151,15 @@
             cursor: grabbing !important;
         }
         .dock-btn {
-            height: 54px;
-            width: 54px;
+            height: 50px;
+            width: 50px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            border-radius: 14px;
-            border: 1px solid rgba(255,255,255,0.14);
-            background: #05070c;
-            color: #f3f4f6;
+            border-radius: 12px;
+            border: 1px solid rgba(116, 132, 162, 0.24);
+            background: rgba(255, 255, 255, 0.7);
+            color: #111827;
             overflow: hidden;
             white-space: nowrap;
             transition: width 260ms cubic-bezier(0.2, 0, 0, 1), background-color 220ms ease, color 220ms ease, transform 220ms cubic-bezier(0.2, 0, 0, 1), box-shadow 220ms ease;
@@ -163,11 +179,12 @@
             transition: max-width 260ms cubic-bezier(0.2, 0, 0, 1), opacity 190ms ease, margin-left 260ms cubic-bezier(0.2, 0, 0, 1);
         }
         .dock-btn:hover {
-            width: 194px;
+            width: 172px;
             justify-content: flex-start;
             padding: 0 14px;
             transform: translateY(-1px);
-            box-shadow: 0 10px 22px rgba(0,0,0,0.28);
+            box-shadow: 0 8px 18px rgba(16, 24, 40, 0.12);
+            background: rgba(255, 255, 255, 0.9);
         }
         .dock-btn:hover .dock-icon {
             transform: scale(1.12);
@@ -178,14 +195,14 @@
             margin-left: 10px;
         }
         .dock-btn-live.is-on {
-            background: #052e1a;
-            border-color: rgba(34, 197, 94, 0.55);
-            color: #22c55e;
+            background: rgba(220, 252, 231, 0.92);
+            border-color: rgba(34, 197, 94, 0.45);
+            color: #15803d;
         }
         .dock-btn-live.is-off {
-            background: #2b0b0b;
-            border-color: rgba(239, 68, 68, 0.58);
-            color: #ef4444;
+            background: rgba(254, 242, 242, 0.92);
+            border-color: rgba(239, 68, 68, 0.45);
+            color: #b91c1c;
         }
         #controlBar {
             transition: padding 300ms cubic-bezier(0.2, 0, 0, 1), gap 280ms cubic-bezier(0.2, 0, 0, 1), transform 260ms cubic-bezier(0.2, 0, 0, 1), box-shadow 260ms ease;
@@ -195,7 +212,7 @@
             padding-left: 10px;
             padding-right: 10px;
             gap: 0;
-            box-shadow: 0 16px 38px rgba(0, 0, 0, 0.44);
+            box-shadow: 0 14px 30px rgba(16, 24, 40, 0.14);
         }
         #controlBar.mode-switching {
             animation: mode-switch-pop 320ms cubic-bezier(0.2, 0, 0, 1);
@@ -228,10 +245,10 @@
             margin-left: auto;
             height: 100%;
             border-radius: 24px;
-            border: 1px solid rgba(198, 198, 198, 0.5);
-            box-shadow: 0 30px 70px rgba(0, 0, 0, 0.32);
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(14px);
+            border: 1px solid rgba(116, 132, 162, 0.24);
+            box-shadow: 0 22px 48px rgba(16, 24, 40, 0.16);
+            background: rgba(255, 255, 255, 0.86);
+            backdrop-filter: blur(10px);
             transition: transform 360ms cubic-bezier(0.2, 0, 0, 1), opacity 260ms ease;
             will-change: transform, opacity;
         }
@@ -251,11 +268,16 @@
 <div id="graphContainer" class="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
 <div id="graphViewport" class="relative w-full h-full pointer-events-auto origin-center">
 <svg id="ipcGraphCanvas" class="absolute inset-0 w-full h-full pointer-events-none"></svg>
+<div class="absolute left-4 bottom-4 z-20 pointer-events-none flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
+<span class="px-3 py-1 rounded-full bg-white/70 backdrop-blur-xl border border-outline-variant/20 shadow-sm">Drag to pan</span>
+<span class="px-3 py-1 rounded-full bg-white/70 backdrop-blur-xl border border-outline-variant/20 shadow-sm">Scroll to zoom</span>
+<span class="px-3 py-1 rounded-full bg-white/70 backdrop-blur-xl border border-outline-variant/20 shadow-sm">Double-click resets</span>
+</div>
 </div>
 </div>
 </div>
 <div class="absolute left-8 top-8 w-80 space-y-4 z-30 surface-enter">
-<div class="backdrop-blur-xl bg-white/85 border border-outline-variant/40 overflow-hidden shadow-md rounded-2xl">
+<div class="glass-panel overflow-hidden">
 <div class="px-4 pt-4 pb-3 border-b border-outline-variant/20 flex items-start justify-between">
 <div>
 <div class="text-[11px] font-semibold tracking-wide text-on-surface">Node Manager</div>
@@ -294,7 +316,7 @@
 </div>
 </div>
 </div>
-<div class="bg-surface-container-low/90 backdrop-blur-md border border-outline-variant/30 p-4 rounded-xl">
+<div class="metric-panel p-4">
 <div class="flex justify-between items-center mb-2">
 <span class="text-[10px] uppercase font-bold tracking-tight">Thread Count</span>
 <span id="threadCountValue" class="text-xs">1,244 ACTIVE</span>
@@ -305,7 +327,7 @@
 </svg>
 </div>
 </div>
-<div class="bg-surface-container-low/90 backdrop-blur-md border border-outline-variant/30 p-4 rounded-xl">
+<div class="metric-panel p-4">
 <div class="flex justify-between items-center mb-2">
 <span class="text-[10px] uppercase font-bold tracking-tight">Memory Fragmentation</span>
 <span id="memoryFragmentationValue" class="text-xs">12.4%</span>
@@ -316,7 +338,7 @@
 </div>
 </div>
 <div class="absolute right-8 top-8 w-64 space-y-4 z-30 surface-enter">
-<div class="bg-surface-container-low/90 backdrop-blur-md border border-outline-variant/30 p-4 rounded-xl">
+<div class="metric-panel p-4">
 <div class="flex justify-between items-center mb-2">
 <span class="text-[10px] uppercase font-bold tracking-tight">Disk I/O</span>
 <span id="diskIoValue" class="text-xs">42.1 MB/s</span>
@@ -327,7 +349,7 @@
 </svg>
 </div>
 </div>
-<div class="bg-surface-container-low/90 backdrop-blur-md border border-outline-variant/30 p-4 rounded-xl">
+<div class="metric-panel p-4">
 <div class="flex justify-between items-center mb-2">
 <span class="text-[10px] uppercase font-bold tracking-tight">Swap Usage</span>
 <span id="swapUsageValue" class="text-xs">2.1 GB</span>
@@ -336,7 +358,7 @@
 <div id="swapUsageBar" class="bg-black h-full w-[45%]"></div>
 </div>
 </div>
-<div class="bg-surface-container-low/90 backdrop-blur-md border border-outline-variant/30 p-4 rounded-xl">
+<div class="metric-panel p-4">
 <div class="flex justify-between items-center mb-2">
 <span class="text-[10px] uppercase font-bold tracking-tight">Interrupt Latency</span>
 <span id="interruptLatencyValue" class="text-xs text-error">120 μs</span>
@@ -347,7 +369,7 @@
 </svg>
 </div>
 </div>
-<div class="bg-surface-container-low/90 backdrop-blur-md border border-outline-variant/30 p-4 rounded-xl">
+<div class="metric-panel p-4">
 <div class="flex justify-between items-center mb-2">
 <span class="text-[10px] uppercase font-bold tracking-tight">Socket Throughput</span>
 <span id="socketThroughputValue" class="text-xs">8.2 Gbps</span>
@@ -359,7 +381,7 @@
 </div>
 </div>
 </div>
-<div id="criticalBanner" class="absolute top-8 left-1/2 -translate-x-1/2 bg-error-container text-on-error-container px-4 py-1 text-[10px] tracking-tighter uppercase font-bold flex items-center gap-2 border border-error animate-pulse z-40 rounded-full shadow-lg">
+<div id="criticalBanner" class="absolute top-8 left-1/2 -translate-x-1/2 bg-error-container text-on-error-container px-4 py-1 text-[10px] tracking-tighter uppercase font-bold flex items-center gap-2 border border-error z-40 rounded-full shadow-md">
 <span id="criticalBannerIcon" class="material-symbols-outlined text-sm">warning</span>
 <span id="criticalBannerText">Critical: PID_4092 high message queue depth detected</span>
 </div>
@@ -377,7 +399,7 @@
 </div>
 </div>
 </main>
-<nav id="controlBar" class="fixed bottom-7 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-3 py-2 bg-[#04060b]/92 border border-white/10 shadow-[0_24px_60px_rgba(0,0,0,0.5)] rounded-2xl backdrop-blur-2xl">
+<nav id="controlBar" class="fixed bottom-7 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-3 py-2 bg-white/78 border border-outline-variant/40 shadow-[0_16px_34px_rgba(16,24,40,0.14)] rounded-2xl backdrop-blur-md">
 <div id="manualControlsGroup" class="flex items-center gap-2">
 <button id="addProcessButton" aria-label="Add Process" title="Add Process" class="dock-btn">
 <span class="material-symbols-outlined dock-icon">add_box</span>

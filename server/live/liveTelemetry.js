@@ -60,14 +60,27 @@ async function collectWindowsSystemResourceMetrics() {
   const command = [
     'powershell -NoProfile -Command',
     '"$disk=(Get-Counter \'\\PhysicalDisk(_Total)\\% Disk Time\' -ErrorAction SilentlyContinue).CounterSamples | Select-Object -First 1;',
+    '$diskRead=(Get-Counter \'\\PhysicalDisk(_Total)\\Disk Read Bytes/sec\' -ErrorAction SilentlyContinue).CounterSamples | Select-Object -First 1;',
+    '$diskWrite=(Get-Counter \'\\PhysicalDisk(_Total)\\Disk Write Bytes/sec\' -ErrorAction SilentlyContinue).CounterSamples | Select-Object -First 1;',
     '$netBytes=(Get-Counter \'\\Network Interface(*)\\Bytes Total/sec\' -ErrorAction SilentlyContinue).CounterSamples;',
     '$netBandwidth=(Get-Counter \'\\Network Interface(*)\\Current Bandwidth\' -ErrorAction SilentlyContinue).CounterSamples;',
+    '$gpu=(Get-Counter \'\\GPU Engine(*)\\Utilization Percentage\' -ErrorAction SilentlyContinue).CounterSamples;',
+    '$batteryObj=Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue | Select-Object -First 1;',
+    '$thermal=Get-WmiObject -Namespace root/wmi -Class MSAcpi_ThermalZoneTemperature -ErrorAction SilentlyContinue | Select-Object -First 1;',
     '$bytes=0; foreach($n in $netBytes){$bytes += [double]$n.CookedValue};',
     '$band=0; foreach($b in $netBandwidth){$band += [double]$b.CookedValue};',
+    '$gpuPct=0; foreach($g in $gpu){$gpuPct += [double]$g.CookedValue};',
+    '$batteryPct=$null; if($batteryObj){$batteryPct=[double]$batteryObj.EstimatedChargeRemaining};',
+    '$tempC=$null; if($thermal -and $thermal.CurrentTemperature){$tempC=([double]$thermal.CurrentTemperature / 10) - 273.15};',
     '[pscustomobject]@{',
     'diskPercent=[math]::Round([double]$disk.CookedValue,1);',
+    'diskReadBps=[math]::Round([double]$diskRead.CookedValue,1);',
+    'diskWriteBps=[math]::Round([double]$diskWrite.CookedValue,1);',
     'networkBytesPerSec=[math]::Round($bytes,1);',
     'networkBandwidthBps=[math]::Round($band,1);',
+    'gpuPercent=[math]::Round($gpuPct,1);',
+    'batteryPercent=if($batteryPct -ne $null){[math]::Round($batteryPct,1)}else{$null};',
+    'temperatureC=if($tempC -ne $null){[math]::Round($tempC,1)}else{$null};',
     '} | ConvertTo-Json -Compress"'
   ].join(' ');
 
@@ -75,8 +88,13 @@ async function collectWindowsSystemResourceMetrics() {
   if (!output.trim()) {
     return {
       diskPercent: 0,
+      diskReadBps: 0,
+      diskWriteBps: 0,
       networkBytesPerSec: 0,
       networkBandwidthBps: 0,
+      gpuPercent: 0,
+      batteryPercent: null,
+      temperatureC: null,
     };
   }
 
@@ -84,14 +102,24 @@ async function collectWindowsSystemResourceMetrics() {
     const parsed = JSON.parse(output);
     return {
       diskPercent: clampPercent(parsed.diskPercent),
+      diskReadBps: Math.max(0, Number(parsed.diskReadBps) || 0),
+      diskWriteBps: Math.max(0, Number(parsed.diskWriteBps) || 0),
       networkBytesPerSec: Math.max(0, Number(parsed.networkBytesPerSec) || 0),
       networkBandwidthBps: Math.max(0, Number(parsed.networkBandwidthBps) || 0),
+      gpuPercent: clampPercent(parsed.gpuPercent),
+      batteryPercent: parsed.batteryPercent == null ? null : clampPercent(parsed.batteryPercent),
+      temperatureC: parsed.temperatureC == null ? null : Math.max(0, Number(parsed.temperatureC) || 0),
     };
   } catch {
     return {
       diskPercent: 0,
+      diskReadBps: 0,
+      diskWriteBps: 0,
       networkBytesPerSec: 0,
       networkBandwidthBps: 0,
+      gpuPercent: 0,
+      batteryPercent: null,
+      temperatureC: null,
     };
   }
 }
@@ -294,9 +322,27 @@ function createLiveTelemetryStream({ broadcast, intervalMs = 1200, processLimit 
       const systemMetrics = process.platform === 'win32'
         ? await Promise.race([
           collectWindowsSystemResourceMetrics(),
-          new Promise((resolve) => setTimeout(() => resolve({ diskPercent: 0, networkBytesPerSec: 0, networkBandwidthBps: 0 }), 350)),
+          new Promise((resolve) => setTimeout(() => resolve({
+            diskPercent: 0,
+            diskReadBps: 0,
+            diskWriteBps: 0,
+            networkBytesPerSec: 0,
+            networkBandwidthBps: 0,
+            gpuPercent: 0,
+            batteryPercent: null,
+            temperatureC: null,
+          }), 350)),
         ])
-        : { diskPercent: 0, networkBytesPerSec: 0, networkBandwidthBps: 0 };
+        : {
+          diskPercent: 0,
+          diskReadBps: 0,
+          diskWriteBps: 0,
+          networkBytesPerSec: 0,
+          networkBandwidthBps: 0,
+          gpuPercent: 0,
+          batteryPercent: null,
+          temperatureC: null,
+        };
       const cpuSample = cpuSampler();
       const totalMemory = os.totalmem();
       const freeMemory = os.freemem();
@@ -380,6 +426,14 @@ function createLiveTelemetryStream({ broadcast, intervalMs = 1200, processLimit 
         proc.networkPercent = Number((networkPercent * netShare).toFixed(1));
       }
 
+      const totalCpuOfActive = activeProcesses.reduce((sum, proc) => sum + Math.max(0, Number(proc.cpuPercent || 0)), 0);
+      for (const proc of activeProcesses) {
+        const cpuShare = totalCpuOfActive > 0
+          ? Math.max(0, Number(proc.cpuPercent || 0)) / totalCpuOfActive
+          : 0;
+        proc.gpuPercent = Number((Number(systemMetrics.gpuPercent || 0) * cpuShare).toFixed(1));
+      }
+
       for (const proc of activeProcesses) {
         proc.deepUsage = buildProcessDeepUsage(proc, cpuSample.coreCount);
       }
@@ -405,16 +459,40 @@ function createLiveTelemetryStream({ broadcast, intervalMs = 1200, processLimit 
             id: 'DISK',
             label: 'Disk IO',
             usedPercent: Number(clampPercent(systemMetrics.diskPercent).toFixed(1)),
+            readBps: Number(systemMetrics.diskReadBps || 0),
+            writeBps: Number(systemMetrics.diskWriteBps || 0),
           },
           network: {
             id: 'NET',
             label: 'Network',
             usedPercent: Number(clampPercent(networkPercent).toFixed(1)),
+            bytesPerSec: Number(systemMetrics.networkBytesPerSec || 0),
+            bandwidthBps: Number(systemMetrics.networkBandwidthBps || 0),
           },
           threads: {
             id: 'THR',
             label: 'Threads',
             usedPercent: Number(Math.min(100, (totalThreads / threadCapacity) * 100).toFixed(1)),
+          },
+          gpu: {
+            id: 'GPU',
+            label: 'GPU',
+            usedPercent: Number(clampPercent(systemMetrics.gpuPercent).toFixed(1)),
+          },
+          battery: {
+            id: 'BAT',
+            label: 'Battery',
+            usedPercent: systemMetrics.batteryPercent == null ? 0 : Number(clampPercent(systemMetrics.batteryPercent).toFixed(1)),
+            isAvailable: systemMetrics.batteryPercent != null,
+          },
+          temperature: {
+            id: 'TMP',
+            label: 'Temperature',
+            usedPercent: systemMetrics.temperatureC == null
+              ? 0
+              : Number(clampPercent((Number(systemMetrics.temperatureC) / 100) * 100).toFixed(1)),
+            celsius: systemMetrics.temperatureC == null ? null : Number(systemMetrics.temperatureC),
+            isAvailable: systemMetrics.temperatureC != null,
           },
           deep: aggregateDeepResources(activeProcesses, cpuSample.coreCount),
         },

@@ -17,6 +17,7 @@ const state = {
   graphLayoutCache: {
     width: 0,
     height: 0,
+    layoutSignature: '',
     nextProcessSlot: 0,
     processSlots: new Map(),
     processAnchors: new Map(),
@@ -156,15 +157,21 @@ const RESOURCE_COLORS = {
   DISK: '#6b7280',
   NET: '#0f766e',
   THR: '#475569',
+  GPU: '#7c3aed',
+  BAT: '#ca8a04',
+  TMP: '#dc2626',
 };
 
-const RESOURCE_ORDER = ['CPU', 'MEM', 'DISK', 'NET', 'THR'];
+const RESOURCE_ORDER = ['CPU', 'MEM', 'DISK', 'NET', 'THR', 'GPU', 'BAT', 'TMP'];
 const RESOURCE_LANE_OFFSET = {
-  CPU: -28,
-  MEM: -14,
-  DISK: 0,
-  NET: 14,
-  THR: 28,
+  CPU: -35,
+  MEM: -25,
+  DISK: -15,
+  NET: -5,
+  THR: 5,
+  GPU: 15,
+  BAT: 25,
+  TMP: 35,
 };
 const PROCESS_RESOURCE_MIN_GAP = 360;
 const GRAPH_LAYOUT = {
@@ -222,6 +229,19 @@ const RESOURCE_CHILDREN = {
     { id: 'THR_WORKER', label: 'Workers', subtitle: 'worker pool' },
     { id: 'THR_IO', label: 'IO Threads', subtitle: 'io workers' },
   ],
+  GPU: () => [
+    { id: 'GPU_3D', label: '3D', subtitle: 'graphics engines' },
+    { id: 'GPU_COPY', label: 'Copy', subtitle: 'copy engines' },
+    { id: 'GPU_VIDEO', label: 'Video', subtitle: 'video engines' },
+  ],
+  BAT: () => [
+    { id: 'BAT_CHARGE', label: 'Charge', subtitle: 'battery level' },
+    { id: 'BAT_RATE', label: 'Rate', subtitle: 'drain profile' },
+  ],
+  TMP: () => [
+    { id: 'TMP_CPU', label: 'CPU Temp', subtitle: 'thermal zone' },
+    { id: 'TMP_GPU', label: 'GPU Temp', subtitle: 'sensor map' },
+  ],
 };
 
 function buildProcessResourceUsage(process) {
@@ -231,6 +251,7 @@ function buildProcessResourceUsage(process) {
     { resourceId: 'DISK', value: Number(process.ioPercent || 0) },
     { resourceId: 'NET', value: Number(process.networkPercent || 0) },
     { resourceId: 'THR', value: Number(process.threads || 0) * 2.2 },
+    { resourceId: 'GPU', value: Number(process.gpuPercent || 0) },
   ];
 
   return usage.filter((item) => item.value >= 2);
@@ -267,6 +288,9 @@ function buildLiveGraph(liveProcesses, graphWidth, graphHeight) {
     { id: 'DISK', label: 'Disk IO', subtitle: 'storage plane', usage: Number(state.live?.resources?.disk?.usedPercent || 0) },
     { id: 'NET', label: 'Network', subtitle: 'network plane', usage: Number(state.live?.resources?.network?.usedPercent || 0) },
     { id: 'THR', label: 'Threads', subtitle: 'thread plane', usage: Number(state.live?.resources?.threads?.usedPercent || 0) },
+    { id: 'GPU', label: 'GPU', subtitle: 'graphics plane', usage: Number(state.live?.resources?.gpu?.usedPercent || 0) },
+    { id: 'BAT', label: 'Battery', subtitle: 'power plane', usage: Number(state.live?.resources?.battery?.usedPercent || 0) },
+    { id: 'TMP', label: 'Temperature', subtitle: 'thermal plane', usage: Number(state.live?.resources?.temperature?.usedPercent || 0) },
   ];
 
   const nodes = [];
@@ -551,9 +575,9 @@ function layoutGraphNodes(nodes, graphWidth, graphHeight) {
   const processes = nodes.filter((node) => node.type === 'process');
   const positions = new Map();
   const cardSizes = {
-    process: { w: 170, h: 54, radius: 8 },
-    resourceRoot: { w: 160, h: 52, radius: 8 },
-    resourceDepth: { w: 136, h: 46, radius: 8 },
+    process: { w: 184, h: 60, radius: 10 },
+    resourceRoot: { w: 170, h: 56, radius: 10 },
+    resourceDepth: { w: 146, h: 50, radius: 10 },
   };
 
   const cache = state.graphLayoutCache;
@@ -576,247 +600,25 @@ function layoutGraphNodes(nodes, graphWidth, graphHeight) {
   const centerX = graphWidth / 2;
   const centerY = graphHeight / 2;
 
-  const rootResources = resources
-    .filter((node) => node.depth === 0)
-    .sort((a, b) => {
-      const ai = RESOURCE_ORDER.indexOf(a.id);
-      const bi = RESOURCE_ORDER.indexOf(b.id);
-      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-    });
-
+  const ringSpacing = 120;
+  const nodeSpacing = 90;
+  const resourceBaseRadius = 120;
+  const processBaseRadius = 400;
   const rootAngles = new Map();
-  const rootById = new Map(rootResources.map((resource) => [resource.id, resource]));
-  const resourceMeta = new Map();
-  const depthResources = resources
-    .filter((node) => node.depth === 1)
-    .sort((a, b) => {
-      const aParent = RESOURCE_ORDER.indexOf(String(a.parentId || ''));
-      const bParent = RESOURCE_ORDER.indexOf(String(b.parentId || ''));
-      if (aParent !== bParent) {
-        return (aParent === -1 ? 99 : aParent) - (bParent === -1 ? 99 : bParent);
-      }
-      return String(a.id).localeCompare(String(b.id));
-    });
 
-  const processRingBaseCapacity = 18;
-  const processRingCapacityStep = 2;
-  const provisionalRingCapacities = [];
-  let remainingForRings = Math.max(1, processes.length);
-  while (remainingForRings > 0) {
-    const cap = processRingBaseCapacity + (provisionalRingCapacities.length * processRingCapacityStep);
-    provisionalRingCapacities.push(cap);
-    remainingForRings -= cap;
-  }
-  const provisionalRingCount = Math.max(1, provisionalRingCapacities.length);
-  const safeMarginX = Math.max(52, Math.round(cardSizes.process.w / 2) + 22);
-  const safeMarginY = Math.max(52, Math.round(cardSizes.process.h / 2) + 24);
-  const maxRadiusX = Math.max(220, (graphWidth / 2) - safeMarginX);
-  const maxRadiusY = Math.max(220, ((graphHeight / 2) - safeMarginY) / GRAPH_LAYOUT.processYScale);
-  const viewportOuterRadius = Math.max(220, Math.min(maxRadiusX, maxRadiusY));
-
-  // Expand process radius when density is high; viewBox fitting handles larger coordinates.
-  const processCardDiag = Math.hypot(cardSizes.process.w, cardSizes.process.h);
-  const processNodeSpacing = processCardDiag + 28;
-  const ellipseUnitPerimeter = ellipsePerimeter(1, GRAPH_LAYOUT.processYScale);
-  const processOuterDemand = processes.length > 0
-    ? ((processes.length * processNodeSpacing) / Math.max(1, ellipseUnitPerimeter)) + 34
-    : 0;
-  const maxOuterRadius = Math.max(viewportOuterRadius, processOuterDemand);
-
-  const preferredGap = Math.max(GRAPH_LAYOUT.processRingGap, Math.round(cardSizes.process.h * 1.9));
-  const ringGap = provisionalRingCount <= 1
-    ? 0
-    : Math.min(preferredGap, Math.max(104, (maxOuterRadius - 360) / (provisionalRingCount - 1)));
-  const baseProcessRadius = provisionalRingCount <= 1
-    ? maxOuterRadius
-    : maxOuterRadius - (ringGap * (provisionalRingCount - 1));
-
-  const centerRadius = Math.max(120, Math.min(GRAPH_LAYOUT.centerRadius, baseProcessRadius * 0.52));
-  const rootCardDiag = Math.hypot(cardSizes.resourceRoot.w, cardSizes.resourceRoot.h);
-  const depthCardDiag = Math.hypot(cardSizes.resourceDepth.w, cardSizes.resourceDepth.h);
-  const radialGuard = 28;
-  const processInnerBoundary = baseProcessRadius - (processCardDiag / 2) - radialGuard;
-  const rootOuterBoundary = centerRadius + (rootCardDiag / 2) + radialGuard;
-  const maxDepthRadiusAllowed = processInnerBoundary - (depthCardDiag / 2) - radialGuard;
-  const minDepthRadiusPreferred = Math.max(rootOuterBoundary + (depthCardDiag / 2) + 24, centerRadius + 120);
-  const minDepthRadius = Math.min(minDepthRadiusPreferred, maxDepthRadiusAllowed);
-  const depthMinGap = depthCardDiag + 38;
-  const depthStartRadius = Math.max(
-    minDepthRadius,
-    Math.min(GRAPH_LAYOUT.childRingRadius, maxDepthRadiusAllowed - 90),
-  );
-  const depthRingGap = Math.max(98, Math.round(depthCardDiag * 0.72));
-
-  const depthRadii = [];
-  let depthPlaced = 0;
-  while (depthPlaced < depthResources.length) {
-    const radius = depthStartRadius + (depthRadii.length * depthRingGap);
-    depthRadii.push(radius);
-    const cap = Math.max(8, Math.floor((Math.PI * 2 * radius) / depthMinGap));
-    depthPlaced += cap;
-  }
-
-  const depthMaxUsable = Math.max(minDepthRadius, maxDepthRadiusAllowed);
-  if (depthRadii.length === 1) {
-    depthRadii[0] = Math.min(depthMaxUsable, Math.max(minDepthRadius, depthRadii[0]));
-  } else if (depthRadii.length > 1) {
-    const availableSpan = Math.max(0, depthMaxUsable - minDepthRadius);
-    const fittedGap = Math.min(depthRingGap, availableSpan / (depthRadii.length - 1));
-    const firstDepthRadius = Math.max(
-      minDepthRadius,
-      depthMaxUsable - (fittedGap * (depthRadii.length - 1)),
-    );
-
-    for (let i = 0; i < depthRadii.length; i += 1) {
-      depthRadii[i] = firstDepthRadius + (i * fittedGap);
+  const sortedResources = [...resources].sort((a, b) => {
+    const aRoot = String(a.resourceGroup || a.parentId || a.id || '');
+    const bRoot = String(b.resourceGroup || b.parentId || b.id || '');
+    const ai = RESOURCE_ORDER.indexOf(aRoot);
+    const bi = RESOURCE_ORDER.indexOf(bRoot);
+    if ((ai === -1 ? 99 : ai) !== (bi === -1 ? 99 : bi)) {
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
     }
-  }
-
-  const childRingRadius = depthRadii.length > 0 ? depthRadii[depthRadii.length - 1] : depthStartRadius;
-  const rootStep = (Math.PI * 2) / Math.max(1, rootResources.length);
-
-  rootResources.forEach((resource, index) => {
-    const angle = -Math.PI / 2 + (index * rootStep);
-    rootAngles.set(resource.id, angle);
-    const x = centerX + Math.cos(angle) * centerRadius;
-    const y = centerY + Math.sin(angle) * centerRadius;
-
-    positions.set(resource.id, { x, y });
-    resourceMeta.set(resource.id, {
-      ringType: 'root',
-      ringRadius: centerRadius,
-      defaultAngle: angle,
-      card: cardSizes.resourceRoot,
-    });
-  });
-
-  // Distribute all depth resources uniformly around depth rings to guarantee spacing.
-  const orderedDepth = [...depthResources].sort((a, b) => {
-    const aParent = RESOURCE_ORDER.indexOf(String(a.parentId || ''));
-    const bParent = RESOURCE_ORDER.indexOf(String(b.parentId || ''));
-    if (aParent !== bParent) {
-      return (aParent === -1 ? 99 : aParent) - (bParent === -1 ? 99 : bParent);
+    if (Number(a.depth || 0) !== Number(b.depth || 0)) {
+      return Number(a.depth || 0) - Number(b.depth || 0);
     }
     return String(a.id).localeCompare(String(b.id));
   });
-
-  let depthCursor = 0;
-  for (let ring = 0; ring < depthRadii.length && depthCursor < orderedDepth.length; ring += 1) {
-    const radius = depthRadii[ring];
-    const ringCap = Math.max(8, Math.floor((Math.PI * 2 * radius) / depthMinGap));
-    const remaining = orderedDepth.length - depthCursor;
-    const count = Math.min(ringCap, remaining);
-    const step = (Math.PI * 2) / Math.max(1, count);
-    const phase = -Math.PI / 2 + (ring * 0.18);
-
-    for (let i = 0; i < count; i += 1) {
-      const resource = orderedDepth[depthCursor + i];
-      const angle = phase + (i * step);
-
-      positions.set(resource.id, {
-        x: centerX + Math.cos(angle) * radius,
-        y: centerY + Math.sin(angle) * radius,
-      });
-
-      resourceMeta.set(resource.id, {
-        ringType: 'depth',
-        ringRadius: radius,
-        defaultAngle: angle,
-        card: cardSizes.resourceDepth,
-      });
-    }
-
-    depthCursor += count;
-  }
-
-  while (depthCursor < orderedDepth.length) {
-    const resource = orderedDepth[depthCursor];
-    const radius = depthRadii.length ? depthRadii[depthRadii.length - 1] : depthStartRadius;
-    const angle = -Math.PI / 2 + ((depthCursor % 12) * ((Math.PI * 2) / 12));
-
-    positions.set(resource.id, {
-      x: centerX + Math.cos(angle) * radius,
-      y: centerY + Math.sin(angle) * radius,
-    });
-
-    resourceMeta.set(resource.id, {
-      ringType: 'depth',
-      ringRadius: radius,
-      defaultAngle: angle,
-      card: cardSizes.resourceDepth,
-    });
-
-    depthCursor += 1;
-  }
-
-  // Enforce pixel-based non-overlap for all resource boxes before rendering.
-  const resourceIds = [...resourceMeta.keys()];
-  const resourceSpacingPadding = 34;
-  for (let iter = 0; iter < 44; iter += 1) {
-    for (let i = 0; i < resourceIds.length; i += 1) {
-      const aId = resourceIds[i];
-      const pa = positions.get(aId);
-      const ma = resourceMeta.get(aId);
-      if (!pa || !ma) {
-        continue;
-      }
-
-      for (let j = i + 1; j < resourceIds.length; j += 1) {
-        const bId = resourceIds[j];
-        const pb = positions.get(bId);
-        const mb = resourceMeta.get(bId);
-        if (!pb || !mb) {
-          continue;
-        }
-
-        const dx = pb.x - pa.x;
-        const dy = pb.y - pa.y;
-        const dist = Math.hypot(dx, dy) || 0.0001;
-        const aDiag = Math.hypot(ma.card.w, ma.card.h);
-        const bDiag = Math.hypot(mb.card.w, mb.card.h);
-        const minDist = ((aDiag + bDiag) / 2) + resourceSpacingPadding;
-        if (dist >= minDist) {
-          continue;
-        }
-
-        const push = (minDist - dist) / 2;
-        const nx = dx / dist;
-        const ny = dy / dist;
-
-        pa.x -= nx * push;
-        pa.y -= ny * push;
-        pb.x += nx * push;
-        pb.y += ny * push;
-      }
-    }
-
-    // Keep resources on their intended rings after collision resolution.
-    for (const id of resourceIds) {
-      const pos = positions.get(id);
-      const meta = resourceMeta.get(id);
-      if (!pos || !meta) {
-        continue;
-      }
-
-      let vx = pos.x - centerX;
-      let vy = pos.y - centerY;
-      let radial = Math.hypot(vx, vy);
-      if (radial < 0.0001) {
-        vx = Math.cos(meta.defaultAngle);
-        vy = Math.sin(meta.defaultAngle);
-        radial = 1;
-      }
-
-      const ux = vx / radial;
-      const uy = vy / radial;
-      const targetRadius = meta.ringRadius;
-      const correctedX = centerX + ux * targetRadius;
-      const correctedY = centerY + uy * targetRadius;
-
-      pos.x = (pos.x * 0.55) + (correctedX * 0.45);
-      pos.y = (pos.y * 0.55) + (correctedY * 0.45);
-    }
-  }
 
   const processSlots = state.graphLayoutCache.processSlots;
   for (const process of processes) {
@@ -826,73 +628,68 @@ function layoutGraphNodes(nodes, graphWidth, graphHeight) {
     }
   }
 
-  // Global stable ring placement with progressive ring capacities: 18, 20, 22, ...
-
   const sortedProcesses = [...processes].sort((a, b) => {
     const sa = Number(processSlots.get(a.id) || 0);
     const sb = Number(processSlots.get(b.id) || 0);
     return sa - sb;
   });
 
-  const depthOuterRadius = depthRadii.length > 0 ? depthRadii[depthRadii.length - 1] : centerRadius;
-  const minProcessBaseRadius = Math.max(
-    baseProcessRadius,
-    depthOuterRadius + (depthCardDiag / 2) + (processCardDiag / 2) + 58,
-    centerRadius + (rootCardDiag / 2) + (processCardDiag / 2) + 90,
-  );
-  const minProcessRingGap = Math.max(112, cardSizes.process.h + 36);
-  const preferredProcessRingGap = Math.max(GRAPH_LAYOUT.processRingGap, Math.round(cardSizes.process.h * 2.2));
-
-  const processRingLayout = resolveProcessRingLayout({
-    processCount: sortedProcesses.length,
-    maxOuterRadius,
-    minBaseRadius: minProcessBaseRadius,
-    preferredGap: preferredProcessRingGap,
-    minGap: minProcessRingGap,
-    nodeSpacing: processNodeSpacing,
-    yScale: GRAPH_LAYOUT.processYScale,
-  });
-
-  const resolvedRingCapacities = processRingLayout.ringCapacities;
-  const resolvedRingCount = processRingLayout.ringCount;
-  const resolvedRingGap = processRingLayout.ringGap;
-  const resolvedBaseProcessRadius = processRingLayout.baseRadius;
-
-  const gcd = (a, b) => {
-    let x = Math.abs(a);
-    let y = Math.abs(b);
-    while (y !== 0) {
-      const t = y;
-      y = x % y;
-      x = t;
-    }
-    return Math.max(1, x);
+  const maxNodesForRing = (radius) => {
+    const circumference = Math.max(1, 2 * Math.PI * Math.max(1, radius));
+    return Math.max(1, Math.floor(circumference / nodeSpacing));
   };
 
-  for (let rank = 0; rank < sortedProcesses.length; rank += 1) {
-    const process = sortedProcesses[rank];
-    let ring = 0;
-    let slotInRing = rank;
-    while (ring < resolvedRingCapacities.length && slotInRing >= resolvedRingCapacities[ring]) {
-      slotInRing -= resolvedRingCapacities[ring];
-      ring += 1;
-    }
-    const safeRing = Math.min(ring, Math.max(0, resolvedRingCapacities.length - 1));
-    const ringCapacity = resolvedRingCapacities[safeRing] || processRingBaseCapacity;
+  const placeNodesOnRings = (nodeList, baseRadius, onPlaced = null) => {
+    const ringRadii = [];
+    let placed = 0;
+    let ringIndex = 0;
 
-    let jump = Math.max(1, Math.floor(ringCapacity / 2) - 1);
-    while (jump > 1 && gcd(jump, ringCapacity) !== 1) {
-      jump -= 1;
-    }
-    const distributedSlot = (slotInRing * jump) % ringCapacity;
-    const angle = (-Math.PI / 2) + ((Math.PI * 2 * distributedSlot) / ringCapacity);
-    const radius = resolvedBaseProcessRadius + (safeRing * resolvedRingGap);
+    while (placed < nodeList.length) {
+      const remaining = nodeList.length - placed;
+      const capacity = 4 + (ringIndex * 2);
+      const radius = baseRadius + (ringIndex * ringSpacing);
+      const maxBySpacing = maxNodesForRing(radius);
+      const nodesInRing = Math.max(1, Math.min(capacity, maxBySpacing, remaining));
+      const rotationOffset = ringIndex * (Math.PI / 2);
 
-    positions.set(process.id, {
-      x: centerX + Math.cos(angle) * radius,
-      y: centerY + Math.sin(angle) * radius * GRAPH_LAYOUT.processYScale,
-    });
-  }
+      ringRadii.push(radius);
+      for (let index = 0; index < nodesInRing; index += 1) {
+        const node = nodeList[placed + index];
+        const angle = ((Math.PI * 2 / nodesInRing) * index) + rotationOffset;
+        const x = centerX + (radius * Math.cos(angle));
+        const y = centerY + (radius * Math.sin(angle));
+
+        positions.set(node.id, { x, y, fromX: centerX, fromY: centerY });
+        node.fx = x;
+        node.fy = y;
+
+        if (typeof onPlaced === 'function') {
+          onPlaced(node, angle);
+        }
+      }
+
+      placed += nodesInRing;
+      ringIndex += 1;
+    }
+
+    return ringRadii;
+  };
+
+  const resourceRingRadii = placeNodesOnRings(sortedResources, resourceBaseRadius, (node, angle) => {
+    if (Number(node.depth || 0) === 0) {
+      rootAngles.set(node.id, angle);
+    }
+  });
+  const lastResourceRadius = resourceRingRadii.length > 0
+    ? resourceRingRadii[resourceRingRadii.length - 1]
+    : resourceBaseRadius;
+  const resolvedProcessBaseRadius = Math.max(processBaseRadius, lastResourceRadius + (ringSpacing * 2));
+  const processRingRadii = placeNodesOnRings(sortedProcesses, resolvedProcessBaseRadius);
+
+  const centerRadius = resourceRingRadii[0] || resourceBaseRadius;
+  const childRingRadius = resourceRingRadii.length > 0
+    ? resourceRingRadii[resourceRingRadii.length - 1]
+    : resourceBaseRadius;
 
   return {
     positions,
@@ -904,10 +701,12 @@ function layoutGraphNodes(nodes, graphWidth, graphHeight) {
     layoutMetrics: {
       centerRadius,
       childRingRadius,
-      depthRadii,
-      processBaseRadius: resolvedBaseProcessRadius,
-      processRingGap: resolvedRingGap,
-      processRingCount: resolvedRingCount,
+      depthRadii: resourceRingRadii,
+      resourceRingRadii,
+      processRingRadii,
+      processBaseRadius: resolvedProcessBaseRadius,
+      processRingGap: ringSpacing,
+      processRingCount: processRingRadii.length,
     },
     rootAngles,
   };
@@ -915,6 +714,33 @@ function layoutGraphNodes(nodes, graphWidth, graphHeight) {
 
 function createSvgEl(name) {
   return document.createElementNS('http://www.w3.org/2000/svg', name);
+}
+
+function ensureGraphSurfaceDefs(canvas) {
+  if (canvas.querySelector('defs[data-graph-surface="true"]')) {
+    return;
+  }
+
+  const defs = createSvgEl('defs');
+  defs.setAttribute('data-graph-surface', 'true');
+
+  const shadow = createSvgEl('filter');
+  shadow.setAttribute('id', 'graphNodeShadow');
+  shadow.setAttribute('x', '-24%');
+  shadow.setAttribute('y', '-24%');
+  shadow.setAttribute('width', '148%');
+  shadow.setAttribute('height', '148%');
+
+  const dropShadow = createSvgEl('feDropShadow');
+  dropShadow.setAttribute('dx', '0');
+  dropShadow.setAttribute('dy', '10');
+  dropShadow.setAttribute('stdDeviation', '10');
+  dropShadow.setAttribute('flood-color', '#000000');
+  dropShadow.setAttribute('flood-opacity', '0.16');
+  shadow.appendChild(dropShadow);
+
+  defs.appendChild(shadow);
+  canvas.appendChild(defs);
 }
 
 function renderNodeSvg(canvas, node, position, cards, nodeFocus = null) {
@@ -928,87 +754,127 @@ function renderNodeSvg(canvas, node, position, cards, nodeFocus = null) {
   const nodeOpacity = onlyResourcesOnHover && isProcess
     ? 0.02
     : (hasNodeFocus ? (isFocused ? 1 : 0.14) : 1);
-  const nodeScale = 1;
+  const nodeScale = hasNodeFocus
+    ? (isFocused ? 1.04 : (onlyResourcesOnHover && isProcess ? 0.92 : 0.97))
+    : 1;
+  const label = humanizeLabel(node.label || node.id || 'Node');
+  const subtitle = isProcess
+    ? (Number.isFinite(Number(node.cpuPercent)) || Number.isFinite(Number(node.memoryPercent))
+      ? `PID ${String(node.id || '').replace(/^live-/, '')} · CPU ${formatPercent(node.cpuPercent, 1)} · MEM ${formatPercent(node.memoryPercent, 1)}`
+      : String(node.subtitle || '').slice(0, 44))
+    : String(node.subtitle || '').slice(0, 44);
+  const typeLabel = isProcess
+    ? 'PROCESS'
+    : (node.depth === 0 ? 'RESOURCE' : 'SUB-RESOURCE');
 
   const group = createSvgEl('g');
-  group.setAttribute('transform', `translate(${position.x}, ${position.y}) scale(${nodeScale})`);
+  const finalTransform = `translate(${position.x}, ${position.y}) scale(${nodeScale})`;
+  const shouldAnimate = Boolean(nodeFocus?.animateLayout)
+    && Number.isFinite(position?.fromX)
+    && Number.isFinite(position?.fromY);
+  if (shouldAnimate) {
+    group.setAttribute('transform', `translate(${position.fromX}, ${position.fromY}) scale(0.72)`);
+    group.style.transition = 'transform 400ms cubic-bezier(0.2, 0, 0, 1), opacity 400ms ease';
+    group.style.willChange = 'transform, opacity';
+  } else {
+    group.setAttribute('transform', finalTransform);
+    group.style.transition = 'none';
+    group.style.willChange = 'auto';
+  }
   group.setAttribute('data-node-id', node.id);
   group.setAttribute('data-node-type', node.type);
   group.setAttribute('data-resource-id', node.resourceGroup || node.id);
-  group.setAttribute('opacity', String(nodeOpacity));
+  group.setAttribute('opacity', shouldAnimate ? '0.01' : String(nodeOpacity));
+  group.setAttribute('filter', 'url(#graphNodeShadow)');
   group.style.cursor = 'pointer';
 
-  // Minimal black card body
   const body = createSvgEl('rect');
   body.setAttribute('x', `${-card.w / 2}`);
   body.setAttribute('y', `${-card.h / 2}`);
-  body.setAttribute('rx', `${card.radius || 8}`);
+  body.setAttribute('rx', `${card.radius || 10}`);
   body.setAttribute('width', `${card.w}`);
   body.setAttribute('height', `${card.h}`);
   body.setAttribute('fill', '#04070d');
   body.setAttribute('stroke', isFocused ? '#dce3ee' : '#1f2937');
-  body.setAttribute('stroke-width', isFocused ? '1.8' : '1');
+  body.setAttribute('stroke-width', isFocused ? '1.9' : '1');
   group.appendChild(body);
 
-  // Minimal label
+  const frame = createSvgEl('rect');
+  frame.setAttribute('x', `${-card.w / 2 + 2}`);
+  frame.setAttribute('y', `${-card.h / 2 + 2}`);
+  frame.setAttribute('rx', `${Math.max(4, (card.radius || 10) - 2)}`);
+  frame.setAttribute('width', `${card.w - 4}`);
+  frame.setAttribute('height', `${card.h - 4}`);
+  frame.setAttribute('fill', 'none');
+  frame.setAttribute('stroke', 'rgba(255, 255, 255, 0.06)');
+  frame.setAttribute('stroke-width', '1');
+  group.appendChild(frame);
+
+  const typeText = createSvgEl('text');
+  typeText.setAttribute('x', `${card.w / 2 - 12}`);
+  typeText.setAttribute('y', `${-card.h / 2 + 14}`);
+  typeText.setAttribute('fill', '#98a3b8');
+  typeText.setAttribute('font-size', '7.8');
+  typeText.setAttribute('font-weight', '700');
+  typeText.setAttribute('letter-spacing', '1.1');
+  typeText.setAttribute('text-anchor', 'end');
+  typeText.textContent = typeLabel;
+  group.appendChild(typeText);
+
   const nameText = createSvgEl('text');
   nameText.setAttribute('x', `${-card.w / 2 + 10}`);
-  nameText.setAttribute('y', `${-card.h / 2 + (isProcess ? 24 : 22)}`);
+  nameText.setAttribute('y', `${-card.h / 2 + 24}`);
   nameText.setAttribute('fill', '#f8fafc');
-  nameText.setAttribute('font-size', isProcess ? '11.5' : '11');
-  nameText.setAttribute('font-weight', '500');
-  nameText.setAttribute('letter-spacing', '0.22');
-  nameText.textContent = humanizeLabel(node.label).slice(0, 20);
+  nameText.setAttribute('font-size', isProcess ? '12' : '11.2');
+  nameText.setAttribute('font-weight', '600');
+  nameText.setAttribute('letter-spacing', '0.18');
+  nameText.textContent = label.slice(0, isProcess ? 22 : 19);
   group.appendChild(nameText);
 
-  // Only show subtitle for resources
+  const subText = createSvgEl('text');
+  subText.setAttribute('x', `${-card.w / 2 + 10}`);
+  subText.setAttribute('y', `${-card.h / 2 + 40}`);
+  subText.setAttribute('fill', '#98a3b8');
+  subText.setAttribute('font-size', isProcess ? '8.6' : '8.9');
+  subText.setAttribute('letter-spacing', '0.14');
+  subText.textContent = subtitle;
+  group.appendChild(subText);
+
   if (!isProcess) {
     const usageValue = Math.max(0, Math.min(100, Number(node.usage || 0)));
+    const usageText = createSvgEl('text');
+    usageText.setAttribute('x', `${card.w / 2 - 10}`);
+    usageText.setAttribute('y', `${-card.h / 2 + 24}`);
+    usageText.setAttribute('fill', '#f8fafc');
+    usageText.setAttribute('font-size', '8.4');
+    usageText.setAttribute('font-weight', '700');
+    usageText.setAttribute('text-anchor', 'end');
+    usageText.textContent = `${formatPercent(usageValue, 1)}`;
+    group.appendChild(usageText);
+
     const usageBarBg = createSvgEl('rect');
     usageBarBg.setAttribute('x', `${-card.w / 2 + 10}`);
-    usageBarBg.setAttribute('y', `${-card.h / 2 + 29}`);
-    usageBarBg.setAttribute('rx', '2');
+    usageBarBg.setAttribute('y', `${-card.h / 2 + card.h - 16}`);
+    usageBarBg.setAttribute('rx', '3');
     usageBarBg.setAttribute('width', `${card.w - 20}`);
-    usageBarBg.setAttribute('height', '3.4');
+    usageBarBg.setAttribute('height', '4');
     usageBarBg.setAttribute('fill', '#1f2937');
     group.appendChild(usageBarBg);
 
     const usageBar = createSvgEl('rect');
     usageBar.setAttribute('x', `${-card.w / 2 + 10}`);
-    usageBar.setAttribute('y', `${-card.h / 2 + 29}`);
-    usageBar.setAttribute('rx', '2');
+    usageBar.setAttribute('y', `${-card.h / 2 + card.h - 16}`);
+    usageBar.setAttribute('rx', '3');
     usageBar.setAttribute('width', `${((card.w - 20) * usageValue) / 100}`);
-    usageBar.setAttribute('height', '3.4');
+    usageBar.setAttribute('height', '4');
     usageBar.setAttribute('fill', '#3b82f6');
     group.appendChild(usageBar);
-
-    const subText = createSvgEl('text');
-    subText.setAttribute('x', `${-card.w / 2 + 10}`);
-    subText.setAttribute('y', `${-card.h / 2 + 40}`);
-    subText.setAttribute('fill', '#98a3b8');
-    subText.setAttribute('font-size', '9');
-    subText.setAttribute('letter-spacing', '0.16');
-    subText.textContent = String(node.subtitle || '').slice(0, 44);
-    group.appendChild(subText);
-  } else {
-    const subText = createSvgEl('text');
-    subText.setAttribute('x', `${-card.w / 2 + 10}`);
-    subText.setAttribute('y', `${-card.h / 2 + 40}`);
-    subText.setAttribute('fill', '#98a3b8');
-    subText.setAttribute('font-size', '8.6');
-    subText.setAttribute('letter-spacing', '0.14');
-    if (Number.isFinite(Number(node.cpuPercent)) || Number.isFinite(Number(node.memoryPercent))) {
-      subText.textContent = `CPU ${formatPercent(node.cpuPercent, 1)} · MEM ${formatPercent(node.memoryPercent, 1)}`;
-    } else {
-      subText.textContent = String(node.subtitle || '').slice(0, 34);
-    }
-    group.appendChild(subText);
   }
 
   const hitbox = createSvgEl('rect');
   hitbox.setAttribute('x', `${-card.w / 2 - 6}`);
   hitbox.setAttribute('y', `${-card.h / 2 - 6}`);
-  hitbox.setAttribute('rx', `${card.radius || 8}`);
+  hitbox.setAttribute('rx', `${card.radius || 10}`);
   hitbox.setAttribute('width', `${card.w + 12}`);
   hitbox.setAttribute('height', `${card.h + 12}`);
   hitbox.setAttribute('fill', 'transparent');
@@ -1017,6 +883,19 @@ function renderNodeSvg(canvas, node, position, cards, nodeFocus = null) {
   group.appendChild(hitbox);
 
   canvas.appendChild(group);
+  if (shouldAnimate) {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        group.setAttribute('transform', finalTransform);
+        group.setAttribute('opacity', String(nodeOpacity));
+      });
+    });
+
+    window.setTimeout(() => {
+      group.setAttribute('opacity', String(nodeOpacity));
+      group.style.willChange = 'auto';
+    }, 460);
+  }
 }
 
 function getNodeCard(node, cards) {
@@ -1221,10 +1100,10 @@ function renderEdgeSvg(canvas, edge, source, target, cards, nodeIndex, positions
     ? 1.0
     : (edge.type === 'usage' ? 2.35 : (edge.type === 'contention' ? 1.5 : 1.8));
   const baseOpacity = edge.type === 'depth-link'
-    ? 0.16
+    ? 0.12
     : (edge.type === 'usage'
-      ? (0.66 + intensity * 0.26)
-      : (edge.type === 'contention' ? (0.4 + intensity * 0.2) : (0.5 + intensity * 0.24)));
+      ? (0.24 + intensity * 0.24)
+      : (edge.type === 'contention' ? (0.2 + intensity * 0.16) : (0.22 + intensity * 0.18)));
   const filteredOpacity = filteredIn ? baseOpacity : 0.05;
   const edgeOpacity = filteredOpacity * focusMultiplier;
   path.setAttribute('stroke-width', String(edgeWidth));
@@ -1238,63 +1117,36 @@ function renderEdgeSvg(canvas, edge, source, target, cards, nodeIndex, positions
 function renderGraphGuides(canvas, graphWidth, graphHeight, processCount, layoutMetrics) {
   const centerX = graphWidth / 2;
   const centerY = graphHeight / 2;
-  const centerRadius = Number(layoutMetrics?.centerRadius || GRAPH_LAYOUT.centerRadius);
-  const childRingRadius = Number(layoutMetrics?.childRingRadius || GRAPH_LAYOUT.childRingRadius);
-  const depthRings = Array.isArray(layoutMetrics?.depthRadii)
-    ? layoutMetrics.depthRadii
+  const resourceRingRadii = Array.isArray(layoutMetrics?.resourceRingRadii)
+    ? layoutMetrics.resourceRingRadii
+    : (Array.isArray(layoutMetrics?.depthRadii)
+      ? layoutMetrics.depthRadii
+      : []);
+  const processRingRadii = Array.isArray(layoutMetrics?.processRingRadii)
+    ? layoutMetrics.processRingRadii
     : [];
-  const processBaseRadius = Number(layoutMetrics?.processBaseRadius || GRAPH_LAYOUT.processBaseRadius);
-  const processRingGap = Number(layoutMetrics?.processRingGap || GRAPH_LAYOUT.processRingGap);
-  const processRingCount = Number(layoutMetrics?.processRingCount || Math.max(1, Math.ceil(processCount / GRAPH_LAYOUT.processRingCapacity)));
 
   const guideLayer = createSvgEl('g');
   guideLayer.setAttribute('opacity', '1');
 
-  const inner = createSvgEl('ellipse');
-  inner.setAttribute('cx', `${centerX}`);
-  inner.setAttribute('cy', `${centerY}`);
-  inner.setAttribute('rx', `${centerRadius + 36}`);
-  inner.setAttribute('ry', `${(centerRadius + 36) * 0.96}`);
-  inner.setAttribute('fill', 'rgba(15, 23, 36, 0.07)');
-  inner.setAttribute('stroke', 'rgba(45, 61, 82, 0.28)');
-  inner.setAttribute('stroke-width', '1');
-  guideLayer.appendChild(inner);
-
-  if (depthRings.length > 0) {
-    const child = createSvgEl('ellipse');
-    child.setAttribute('cx', `${centerX}`);
-    child.setAttribute('cy', `${centerY}`);
-    const dynamicChildRadius = depthRings[depthRings.length - 1] || childRingRadius;
-    child.setAttribute('rx', `${dynamicChildRadius + 30}`);
-    child.setAttribute('ry', `${(dynamicChildRadius + 30) * 0.95}`);
-    child.setAttribute('fill', 'rgba(14, 20, 30, 0.04)');
-    child.setAttribute('stroke', 'rgba(51, 65, 85, 0.22)');
-    child.setAttribute('stroke-width', '1');
-    guideLayer.appendChild(child);
-  }
-
-  for (let idx = 0; idx < depthRings.length - 1; idx += 1) {
-    const r = depthRings[idx];
-    const ringGuide = createSvgEl('ellipse');
+  for (const r of resourceRingRadii) {
+    const ringGuide = createSvgEl('circle');
     ringGuide.setAttribute('cx', `${centerX}`);
     ringGuide.setAttribute('cy', `${centerY}`);
-    ringGuide.setAttribute('rx', `${r + 24}`);
-    ringGuide.setAttribute('ry', `${(r + 24) * 0.95}`);
+    ringGuide.setAttribute('r', `${r}`);
     ringGuide.setAttribute('fill', 'none');
-    ringGuide.setAttribute('stroke', 'rgba(51, 65, 85, 0.16)');
+    ringGuide.setAttribute('stroke', 'rgba(0, 0, 0, 0.08)');
     ringGuide.setAttribute('stroke-width', '1');
     guideLayer.appendChild(ringGuide);
   }
 
-  for (let ring = 0; ring < processRingCount; ring += 1) {
-    const radius = processBaseRadius + (ring * processRingGap);
-    const loop = createSvgEl('ellipse');
+  for (const radius of processRingRadii) {
+    const loop = createSvgEl('circle');
     loop.setAttribute('cx', `${centerX}`);
     loop.setAttribute('cy', `${centerY}`);
-    loop.setAttribute('rx', `${radius}`);
-    loop.setAttribute('ry', `${radius * GRAPH_LAYOUT.processYScale}`);
+    loop.setAttribute('r', `${radius}`);
     loop.setAttribute('fill', 'none');
-    loop.setAttribute('stroke', ring === 0 ? 'rgba(30, 41, 59, 0.4)' : 'rgba(30, 41, 59, 0.24)');
+    loop.setAttribute('stroke', 'rgba(0, 0, 0, 0.08)');
     loop.setAttribute('stroke-width', '1');
     guideLayer.appendChild(loop);
   }
@@ -1314,6 +1166,18 @@ function setHoverProcess(nextProcessId) {
 function renderGraphScene(canvas, sourceGraph, graphWidth, graphHeight) {
   const { positions, cards, layoutMetrics } = layoutGraphNodes(sourceGraph.nodes || [], graphWidth, graphHeight);
   const nodeIndex = new Map((sourceGraph.nodes || []).map((node) => [node.id, node]));
+  const layoutSignature = (sourceGraph.nodes || [])
+    .map((node) => {
+      const pos = positions.get(node.id);
+      if (!pos) {
+        return `${node.id}:na`;
+      }
+      return `${node.id}:${Math.round(pos.x)}:${Math.round(pos.y)}`;
+    })
+    .sort()
+    .join('|');
+  const animateLayout = state.graphLayoutCache.layoutSignature !== layoutSignature;
+  state.graphLayoutCache.layoutSignature = layoutSignature;
   if (state.graphInteraction.hoverProcessId && !nodeIndex.has(state.graphInteraction.hoverProcessId)) {
     state.graphInteraction.hoverProcessId = null;
   }
@@ -1373,6 +1237,7 @@ function renderGraphScene(canvas, sourceGraph, graphWidth, graphHeight) {
     focusedNodeIds,
     onlyResourcesOnHover,
     highlightedResourceIds,
+    animateLayout,
   };
 
   let minX = Number.POSITIVE_INFINITY;
@@ -1392,9 +1257,10 @@ function renderGraphScene(canvas, sourceGraph, graphWidth, graphHeight) {
   }
 
   canvas.innerHTML = '';
+  ensureGraphSurfaceDefs(canvas);
   const zoomScale = clampScale(Number(state.graphView?.scale || 1));
   const hasBounds = Number.isFinite(minX) && Number.isFinite(minY) && Number.isFinite(maxX) && Number.isFinite(maxY);
-  const fitPadding = 120;
+  const fitPadding = 148;
   const fallbackWidth = Math.max(1, graphWidth);
   const fallbackHeight = Math.max(1, graphHeight);
 
@@ -1785,16 +1651,24 @@ function renderMetrics() {
   setText('memoryFragmentationValue', formatPercent(memPercent * 0.8, 1));
   setBar('memoryFragmentationBar', memPercent * 0.8);
 
-  setText('diskIoValue', formatSpeed(diskPercent * 2.2));
+  const diskReadBps = Number(state.live?.resources?.disk?.readBps || 0);
+  const diskWriteBps = Number(state.live?.resources?.disk?.writeBps || 0);
+  const totalDiskBps = state.liveEnabled ? (diskReadBps + diskWriteBps) : (diskPercent * 2.2 * 1024 * 1024);
+  setText('diskIoValue', formatSpeed(totalDiskBps / (1024 * 1024)));
   setSparkline('diskIoSparkline', state.history.disk);
 
   setText('swapUsageValue', formatBytes((state.live?.host?.totalMemory || 0) * (memPercent / 100) * 0.45));
   setBar('swapUsageBar', memPercent * 0.9);
 
-  setText('interruptLatencyValue', `${latency} μs`);
+  const tempC = Number(state.live?.resources?.temperature?.celsius || 0);
+  setText('interruptLatencyValue', state.liveEnabled && tempC > 0 ? `${tempC.toFixed(1)} C` : `${latency} μs`);
   setSparkline('interruptLatencySparkline', state.history.latency);
 
-  setText('socketThroughputValue', `${(netPercent * 0.16).toFixed(1)} Gbps`);
+  const netBytesPerSec = Number(state.live?.resources?.network?.bytesPerSec || 0);
+  const netGbps = state.liveEnabled
+    ? ((netBytesPerSec * 8) / 1_000_000_000)
+    : (netPercent * 0.16);
+  setText('socketThroughputValue', `${netGbps.toFixed(1)} Gbps`);
   setSparkline('socketThroughputSparkline', state.history.network);
 }
 
