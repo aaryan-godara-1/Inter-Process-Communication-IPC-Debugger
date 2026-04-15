@@ -16,7 +16,7 @@ function execCommand(command, timeout = 1200) {
 async function collectWindowsProcesses(limit) {
   const command = [
     'powershell -NoProfile -Command',
-    '"Get-Process |',
+    '"Get-Process -ErrorAction SilentlyContinue |',
     'Sort-Object -Property WorkingSet64 -Descending |',
     'Where-Object { $_.Id -gt 0 } |',
     `Select-Object -First ${Number(limit)} `,
@@ -25,13 +25,12 @@ async function collectWindowsProcesses(limit) {
     '@{Name=\'cpuTime\';Expression={[double]($_.CPU)}},',
     '@{Name=\'workingSet\';Expression={[int64]$_.WorkingSet64}},',
     '@{Name=\'threads\';Expression={$_.Threads.Count}},',
-    '@{Name=\'handles\';Expression={[int]$_.Handles}},',
-    '@{Name=\'ioReadBytes\';Expression={[double]$_.IOReadBytes}},',
-    '@{Name=\'ioWriteBytes\';Expression={[double]$_.IOWriteBytes}} |',
+    '@{Name=\'handles\';Expression={[int]$_.HandleCount}} |',
     'ConvertTo-Json -Compress"'
   ].join(' ');
 
-  const output = await execCommand(command, 900);
+  // Get-Process startup on Windows can exceed 1s under load; allow a safer timeout.
+  const output = await execCommand(command, 3500);
   if (!output.trim()) {
     return [];
   }
@@ -47,8 +46,8 @@ async function collectWindowsProcesses(limit) {
         workingSet: Number(row.workingSet) || 0,
         threads: Number(row.threads) || 0,
         handles: Number(row.handles) || 0,
-        ioReadBytes: Number(row.ioReadBytes) || 0,
-        ioWriteBytes: Number(row.ioWriteBytes) || 0,
+        ioReadBytes: 0,
+        ioWriteBytes: 0,
       }))
       .filter((row) => row.pid > 0);
   } catch {
@@ -537,9 +536,15 @@ function createLiveTelemetryStream({ broadcast, intervalMs = 1200, processLimit 
     return snapshot;
   }
 
+  async function requestSample() {
+    await sampleOnce();
+    return snapshot;
+  }
+
   return {
     setSubscribers,
     getSnapshot,
+    requestSample,
   };
 }
 

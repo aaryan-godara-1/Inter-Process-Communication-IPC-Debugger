@@ -71,6 +71,21 @@ wss.on('connection', (socket) => {
           liveSubscribers.delete(socket);
         }
         liveStream.setSubscribers(liveSubscribers.size);
+        if (enabled) {
+          liveStream.requestSample()
+            .then((freshSnapshot) => {
+              if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: 'live:update', payload: freshSnapshot }));
+              }
+            })
+            .catch(() => {
+              if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: 'live:update', payload: liveStream.getSnapshot() }));
+              }
+            });
+        } else if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: 'live:update', payload: liveStream.getSnapshot() }));
+        }
       }
     } catch {
       // Ignore malformed websocket payloads from clients.

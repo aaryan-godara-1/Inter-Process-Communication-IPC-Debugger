@@ -4,6 +4,7 @@ class Process {
     this.state = 'running';
     this.heldResources = {};
     this.requestedResources = {};
+    this.requestTimestamps = {}; // Track when each resource was requested
     this.priority = priority;
     this.waitSteps = 0;
     // CPU core assignments (0-indexed core IDs)
@@ -25,10 +26,15 @@ class Process {
 
   request(resourceId, amount = 1) {
     this.requestedResources[resourceId] = amount;
+    // Record the timestamp of when this request was made
+    if (!this.requestTimestamps[resourceId]) {
+      this.requestTimestamps[resourceId] = Date.now();
+    }
   }
 
   clearRequest(resourceId) {
     delete this.requestedResources[resourceId];
+    delete this.requestTimestamps[resourceId];
   }
 
   clearRequests() {
@@ -54,6 +60,7 @@ class Process {
       state: this.state,
       heldResources: { ...this.heldResources },
       requestedResources: { ...this.requestedResources },
+      requestTimestamps: { ...this.requestTimestamps },
       priority: this.priority,
       waitSteps: this.waitSteps,
       cpuCores: [...this.cpuCores],

@@ -7,6 +7,17 @@ function formatTimestamp() {
   return new Date().toLocaleTimeString([], { hour12: false });
 }
 
+function parseScenario(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'empty' || raw === 'none') {
+    return 'empty';
+  }
+  if (raw === 'normal' || raw === 'normal-flow') {
+    return 'normal-flow';
+  }
+  return 'deadlock';
+}
+
 function createSimulationRunner(broadcast = () => {}) {
   const processManager = new ProcessManager();
   const resourceManager = new ResourceManager();
@@ -20,6 +31,7 @@ function createSimulationRunner(broadcast = () => {}) {
     running: false,
     mode: 'step',
     speed: 1000,
+    currentScenario: 'deadlock',
     timer: null,
 
     log(message, type = 'info', details = {}) {
@@ -47,6 +59,19 @@ function createSimulationRunner(broadcast = () => {}) {
           process.state = 'running';
         }
       }
+    },
+
+    resetEntities() {
+      this.processManager.reset();
+      this.resourceManager.reset();
+    },
+
+    createPresetProcess(data) {
+      return this.processManager.createProcess(data);
+    },
+
+    createPresetResource(data) {
+      return this.resourceManager.createResource(data);
     },
 
     tryResolveRequests() {
@@ -113,6 +138,7 @@ function createSimulationRunner(broadcast = () => {}) {
           mode: this.mode,
           speed: this.speed,
           stepCount: this.stepCount,
+          scenario: this.currentScenario,
         },
       };
 
@@ -208,7 +234,7 @@ function createSimulationRunner(broadcast = () => {}) {
 
       const state = this.emitState();
       if (state.analysis.state === 'DEADLOCK') {
-        this.pause();
+        this.log('Deadlock persists while simulation is running', 'warning', { source });
       }
       return state;
     },
@@ -278,7 +304,150 @@ function createSimulationRunner(broadcast = () => {}) {
       }
       return this.emitState();
     },
+
+    applyDeadlockPreset() {
+      const p1 = this.processManager.createProcess({ priority: 4 });
+      const p2 = this.processManager.createProcess({ priority: 4 });
+      const p3 = this.processManager.createProcess({ priority: 3 });
+      const p4 = this.processManager.createProcess({ priority: 2 });
+      const r1 = this.resourceManager.createResource({ totalInstances: 1 });
+      const r2 = this.resourceManager.createResource({ totalInstances: 1 });
+      const r3 = this.resourceManager.createResource({ totalInstances: 2 });
+
+      // Allocate resources to processes (green edges)
+      this.resourceManager.allocate(p1.pid, r1.resourceId, 1);
+      p1.hold(r1.resourceId, 1);
+      this.resourceManager.allocate(p2.pid, r2.resourceId, 1);
+      p2.hold(r2.resourceId, 1);
+      this.resourceManager.allocate(p3.pid, r3.resourceId, 1);
+      p3.hold(r3.resourceId, 1);
+      this.resourceManager.allocate(p4.pid, r3.resourceId, 1);
+      p4.hold(r3.resourceId, 1);
+
+      // Both p1 and p2 request each other's resources (creates circular wait - red edges)
+      p1.request(r2.resourceId, 1);
+      p2.request(r1.resourceId, 1);
+      
+      p1.state = 'waiting';
+      p2.state = 'waiting';
+      p1.waitSteps = 0;
+      p2.waitSteps = 0;
+
+      this.log(`🔄 Deadlock preset: ${p1.pid} holds ${r1.resourceId}, requesting ${r2.resourceId}`, 'system');
+      this.log(`🔄 Deadlock preset: ${p2.pid} holds ${r2.resourceId}, requesting ${r1.resourceId}`, 'system');
+      this.log(`⏳ Watching for circular wait pattern to emerge...`, 'info');
+    },
+
+    applyNormalFlowPreset() {
+      const p1 = this.createPresetProcess({ priority: 4 });
+      const p2 = this.createPresetProcess({ priority: 3 });
+      const p3 = this.createPresetProcess({ priority: 2 });
+      const p4 = this.createPresetProcess({ priority: 1 });
+
+      const r1 = this.createPresetResource({ resourceId: 'R1', totalInstances: 1 });
+      const r2 = this.createPresetResource({ resourceId: 'R2', totalInstances: 1 });
+      const r3 = this.createPresetResource({ resourceId: 'R3', totalInstances: 2 });
+
+      // Allocate resources (green edges)
+      this.resourceManager.allocate(p1.pid, r1.resourceId, 1);
+      p1.hold(r1.resourceId, 1);
+      this.resourceManager.allocate(p2.pid, r2.resourceId, 1);
+      p2.hold(r2.resourceId, 1);
+      this.resourceManager.allocate(p3.pid, r3.resourceId, 1);
+      p3.hold(r3.resourceId, 1);
+      this.resourceManager.allocate(p4.pid, r3.resourceId, 1);
+      p4.hold(r3.resourceId, 1);
+
+      p1.state = 'running';
+      p2.state = 'running';
+      p3.state = 'running';
+      p4.state = 'running';
+
+      this.log(`✓ Normal flow: 4 processes and 3 resources with no waiting`, 'system');
+      this.log(`✓ Resource utilization: steady allocations, zero queued requests`, 'system');
+    },
+
+    applyBottleneckPreset() {
+      const p1 = this.createPresetProcess({ priority: 1 });
+      const p2 = this.createPresetProcess({ priority: 4 });
+      const p3 = this.createPresetProcess({ priority: 3 });
+      const p4 = this.createPresetProcess({ priority: 2 });
+
+      const r1 = this.createPresetResource({ resourceId: 'R1', totalInstances: 1 });
+      const r2 = this.createPresetResource({ resourceId: 'R2', totalInstances: 1 });
+      const r3 = this.createPresetResource({ resourceId: 'R3', totalInstances: 2 });
+
+      // Allocate resources (green edges)
+      this.resourceManager.allocate(p1.pid, r1.resourceId, 1);
+      p1.hold(r1.resourceId, 1);
+      this.resourceManager.allocate(p2.pid, r2.resourceId, 1);
+      p2.hold(r2.resourceId, 1);
+      this.resourceManager.allocate(p3.pid, r3.resourceId, 1);
+      p3.hold(r3.resourceId, 1);
+
+      // One process waiting for bottleneck resource (red edges)
+      p4.request(r1.resourceId, 1);
+      p4.request(r2.resourceId, 1);
+      p4.state = 'waiting';
+      p4.waitSteps = 0;
+
+      p1.state = 'running';
+      p2.state = 'running';
+      p3.state = 'running';
+
+      this.log(`⏸️ Bottleneck preset: ${p1.pid} and ${p2.pid} hold critical resources`, 'system');
+      this.log(`⏸️ Bottleneck forming: ${p4.pid} waiting for multiple resources`, 'system');
+      this.log(`📊 Resource utilization: 67% (3 allocated, 1 waiting for 2)`, 'warning');
+    },
   };
+
+  runner.initialize = function initialize({ scenario = 'deadlock' } = {}) {
+    const preset = parseScenario(scenario);
+
+    this.currentScenario = preset;
+    this.resetEntities();
+    this.stepCount = 0;
+    this.logs = [];
+    
+    // Ensure any running timer is cleared
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    this.running = false;
+
+    if (preset === 'normal-flow') {
+      this.applyNormalFlowPreset();
+      this.log('Loaded normal flow scenario', 'system', { scenario: 'normal-flow' });
+    } else if (preset === 'deadlock') {
+      this.applyDeadlockPreset();
+      this.log('Loaded default deadlock scenario', 'system', { scenario: 'deadlock' });
+    } else {
+      this.log('Loaded empty scenario', 'system', { scenario: 'empty' });
+    }
+
+    this.syncProcessStates();
+    return this.emitState();
+  };
+
+  runner.reset = function reset(options = {}) {
+    const scenario = parseScenario(options.scenario);
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    this.running = false;
+    this.mode = 'step';
+    if (Object.prototype.hasOwnProperty.call(options, 'speed')) {
+      this.speed = Math.max(100, Number(options.speed) || this.speed);
+    } else {
+      this.speed = 1000;
+    }
+    return this.initialize({ scenario });
+  };
+
+  // Start simulation mode with a non-blocking default so the UI visibly advances.
+  runner.reset({ scenario: 'normal-flow' });
 
   return runner;
 }

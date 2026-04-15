@@ -3,6 +3,24 @@ const express = require('express');
 function createSimulationRoutes(runner) {
   const router = express.Router();
 
+  router.post('/simulation/process', (req, res) => {
+    try {
+      const process = runner.createProcess(req.body || {});
+      res.status(201).json({ success: true, process, state: runner.getState() });
+    } catch (error) {
+      res.status(400).json({ success: false, error: error.message });
+    }
+  });
+
+  router.post('/simulation/resource', (req, res) => {
+    try {
+      const resource = runner.createResource(req.body || {});
+      res.status(201).json({ success: true, resource, state: runner.getState() });
+    } catch (error) {
+      res.status(400).json({ success: false, error: error.message });
+    }
+  });
+
   router.get('/health', (req, res) => {
     res.json({ status: 'ok', uptime: process.uptime() });
   });
@@ -58,7 +76,7 @@ function createSimulationRoutes(runner) {
 
   router.post('/reset', (req, res) => {
     try {
-      const state = runner.reset();
+      const state = runner.reset(req.body || {});
       res.json({ success: true, state });
     } catch (error) {
       res.status(400).json({ success: false, error: error.message });
